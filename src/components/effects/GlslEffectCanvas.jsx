@@ -1,5 +1,19 @@
 import { memo, useCallback, useEffect, useRef } from 'react'
 import { createGlslEffectRenderer } from '../../utils/glslEffects'
+import useTimelineStore from '../../stores/timelineStore'
+
+const GLSL_PREVIEW_QUALITY_SCALE = {
+  full: 1,
+  half: 0.5,
+  quarter: 0.25,
+}
+
+function getSourceDimensions(source) {
+  return {
+    width: source?.videoWidth || source?.naturalWidth || source?.width || 0,
+    height: source?.videoHeight || source?.naturalHeight || source?.height || 0,
+  }
+}
 
 const GlslEffectCanvas = memo(function GlslEffectCanvas({
   sourceRef = null,
@@ -13,10 +27,12 @@ const GlslEffectCanvas = memo(function GlslEffectCanvas({
   const canvasRef = useRef(null)
   const rendererRef = useRef(null)
   const imageRef = useRef(null)
-  const latestRef = useRef({ effects, clipTime })
+  const glslPreviewQuality = useTimelineStore(state => state.glslPreviewQuality)
+  const qualityScale = GLSL_PREVIEW_QUALITY_SCALE[glslPreviewQuality] || 1
+  const latestRef = useRef({ effects, clipTime, qualityScale })
   const renderedRef = useRef(false)
 
-  latestRef.current = { effects, clipTime }
+  latestRef.current = { effects, clipTime, qualityScale }
 
   const setRendered = useCallback((next) => {
     if (renderedRef.current === next) return
@@ -65,8 +81,15 @@ const GlslEffectCanvas = memo(function GlslEffectCanvas({
       const source = loadedImage || sourceRef?.current
       if (source) {
         try {
-          const { effects: latestEffects, clipTime: latestClipTime } = latestRef.current
-          const rendered = Boolean(rendererRef.current?.render(source, latestEffects, latestClipTime))
+          const { effects: latestEffects, clipTime: latestClipTime, qualityScale: latestQualityScale } = latestRef.current
+          const sourceDimensions = getSourceDimensions(source)
+          const renderSize = latestQualityScale < 0.999 && sourceDimensions.width > 0 && sourceDimensions.height > 0
+            ? {
+              width: Math.max(1, Math.round(sourceDimensions.width * latestQualityScale)),
+              height: Math.max(1, Math.round(sourceDimensions.height * latestQualityScale)),
+            }
+            : null
+          const rendered = Boolean(rendererRef.current?.render(source, latestEffects, latestClipTime, renderSize))
           setRendered(rendered)
         } catch (err) {
           console.warn('GLSL effect preview failed.', err)

@@ -573,6 +573,35 @@ export function hasGlslEffect(effects) {
     && effects.some((effect) => effect && effect.enabled !== false && isGlslEffectType(effect.type))
 }
 
+/**
+ * Build a list of static-valued GLSL effect entries from a source clip's
+ * effects, evaluated at `clipTime`. Used by the preview pipeline to push
+ * GLSL effects from adjustment layers down onto each underlying media clip
+ * so they render via the existing per-clip GlslEffectCanvas. The export
+ * path applies these to the composited result via
+ * `applyGlslEffectsToCanvas` instead, so this is preview-only.
+ *
+ * Each snapshot returns evaluated `settings` and a null `keyframes` so the
+ * downstream `getAnimatedGlslEffectUniforms` treats it as a static frame.
+ * The id is suffixed so it never collides with the clip's own effect ids.
+ */
+export function snapshotAdjustmentGlslEffectsForOverlay(effects, clipTime) {
+  if (!Array.isArray(effects) || effects.length === 0) return []
+  const out = []
+  for (const effect of effects) {
+    if (!effect || effect.enabled === false || !isGlslEffectType(effect.type)) continue
+    const animated = getAnimatedEffectSettings({ keyframes: null }, effect, clipTime)
+    out.push({
+      id: `${effect.id || effect.type}__adjustment-overlay`,
+      type: effect.type,
+      enabled: true,
+      keyframes: null,
+      settings: animated.settings || {},
+    })
+  }
+  return out
+}
+
 export function getAnimatedGlslEffectUniforms(effects, clipTime = 0) {
   const uniforms = {
     shakeAmount: 0,

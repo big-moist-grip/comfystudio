@@ -1168,6 +1168,82 @@ export function modifyLTX23I2VWorkflow(workflow, options = {}) {
 }
 
 /**
+ * Workflow modifier for LTX 2.3 Image + Audio-to-Video.
+ */
+export function modifyLTX23IA2VWorkflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    negativePrompt = '',
+    inputImage = '',
+    inputAudio = '',
+    width = 1280,
+    height = 720,
+    duration = 9,
+    fps = 24,
+    seed = Math.floor(Math.random() * 1000000000000),
+    filenamePrefix = 'video/ltx23_ia2v',
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const numericWidth = Math.max(256, Math.round(Number(width) || 1280))
+  const numericHeight = Math.max(256, Math.round(Number(height) || 720))
+  const numericDuration = Math.max(1, Number(duration) || 9)
+  const numericFps = Math.max(1, Math.round(Number(fps) || 24))
+  const numericSeed = Math.round(Number(seed) || Math.floor(Math.random() * 1000000000000))
+
+  if (modified['269']?.inputs && inputImage) {
+    modified['269'].inputs.image = inputImage
+  }
+
+  if (modified['276']?.inputs && inputAudio) {
+    modified['276'].inputs.audio = inputAudio
+    delete modified['276'].inputs.audioUI
+  }
+
+  if (modified['340:319']?.inputs && 'value' in modified['340:319'].inputs) {
+    modified['340:319'].inputs.value = prompt
+  }
+
+  if (modified['340:314']?.inputs && 'text' in modified['340:314'].inputs) {
+    modified['340:314'].inputs.text = negativePrompt || modified['340:314'].inputs.text
+  }
+
+  if (modified['340:330']?.inputs && 'value' in modified['340:330'].inputs) {
+    modified['340:330'].inputs.value = numericWidth
+  }
+
+  if (modified['340:324']?.inputs && 'value' in modified['340:324'].inputs) {
+    modified['340:324'].inputs.value = numericHeight
+  }
+
+  if (modified['340:331']?.inputs && 'value' in modified['340:331'].inputs) {
+    modified['340:331'].inputs.value = numericDuration
+  }
+
+  if (modified['340:323']?.inputs && 'value' in modified['340:323'].inputs) {
+    modified['340:323'].inputs.value = numericFps
+  }
+
+  if (modified['340:305']?.inputs && 'value' in modified['340:305'].inputs) {
+    modified['340:305'].inputs.value = false
+  }
+
+  if (modified['340:285']?.inputs && 'noise_seed' in modified['340:285'].inputs) {
+    modified['340:285'].inputs.noise_seed = numericSeed
+  }
+
+  if (modified['340:286']?.inputs && 'noise_seed' in modified['340:286'].inputs) {
+    modified['340:286'].inputs.noise_seed = (numericSeed + 1000003) >>> 0
+  }
+
+  if (modified['341']?.inputs && 'filename_prefix' in modified['341'].inputs) {
+    modified['341'].inputs.filename_prefix = filenamePrefix
+  }
+
+  return modified
+}
+
+/**
  * Workflow modifier for 1-Click Multiple Angles (Qwen Image Edit)
  * Generates 8 camera angles from a single image
  */
@@ -1270,7 +1346,7 @@ export function modifyQwenImageEdit2509Workflow(workflow, options = {}) {
     return /load\s*product/i.test(title)
   })
 
-  for (const [nodeId, node] of Object.entries(modified)) {
+  for (const node of Object.values(modified)) {
     if (!node || typeof node !== 'object') continue
     const title = (node._meta && node._meta.title) ? String(node._meta.title) : ''
     const cls = node.class_type || ''
@@ -1345,6 +1421,155 @@ export function modifyQwenImageEdit2509Workflow(workflow, options = {}) {
       if (!isQwenEdit) continue
       if (ref1) node.inputs.image2 = ['ref_img_1', 0]
       if (ref2) node.inputs.image3 = ['ref_img_2', 0]
+    }
+  }
+
+  return modified
+}
+
+function resolveImageAspectRatioLabel(width, height) {
+  const ratio = resolveClosestAspectRatio(width, height)
+  if (ratio === '1:1') return '1:1 (Square)'
+  if (ratio === '16:9') return '16:9 (Widescreen)'
+  if (ratio === '9:16') return '9:16 (Portrait)'
+  if (ratio === '4:3') return '4:3'
+  if (ratio === '3:4') return '3:4'
+  return '1:1 (Square)'
+}
+
+function isLikelyNegativePromptText(text = '') {
+  return /(blurry|low quality|watermark|bad anatomy|distorted|ugly|cartoon|oversaturated|logo|extra fingers)/i.test(String(text || ''))
+}
+
+/**
+ * Generic modifier for local API-format ComfyUI workflows with standard
+ * prompt/image/video/seed/size controls.
+ */
+export function modifyLocalApiWorkflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    negativePrompt = '',
+    inputImage = '',
+    inputVideo = '',
+    width = 1024,
+    height = 1024,
+    duration = 5,
+    fps = 24,
+    seed = Math.floor(Math.random() * 1000000000000),
+    filenamePrefix = '',
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const numericWidth = Math.max(256, Math.round(Number(width) || 1024))
+  const numericHeight = Math.max(256, Math.round(Number(height) || 1024))
+  const numericFps = Math.max(1, Math.round(Number(fps) || 24))
+  const numericDuration = Math.max(1, Number(duration) || 5)
+  const frameCount = Math.round(numericDuration * numericFps) + 1
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+    const cls = String(node.class_type || '')
+    const title = String(node?._meta?.title || '')
+    const lowerTitle = title.toLowerCase()
+
+    if (inputImage && cls === 'LoadImage' && 'image' in node.inputs) {
+      node.inputs.image = inputImage
+    }
+    if (inputVideo && cls === 'LoadVideo' && 'file' in node.inputs) {
+      node.inputs.file = inputVideo
+    }
+
+    if (cls === 'SaveImage' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'image/comfystudio_local'
+    }
+    if (cls === 'SaveVideo' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'video/comfystudio_local'
+    }
+
+    if (cls === 'CLIPTextEncode' && typeof node.inputs.text === 'string') {
+      if (lowerTitle.includes('negative') || isLikelyNegativePromptText(node.inputs.text)) {
+        node.inputs.text = negativePrompt
+      } else {
+        node.inputs.text = prompt
+      }
+    }
+    if (cls === 'TextEncodeQwenImageEdit' && typeof node.inputs.prompt === 'string') {
+      node.inputs.prompt = node.inputs.prompt.trim() ? prompt : negativePrompt
+    }
+    if (cls === 'PrimitiveStringMultiline' && 'value' in node.inputs && /prompt/i.test(title)) {
+      node.inputs.value = prompt
+    }
+
+    if ('seed' in node.inputs && (cls.includes('Sampler') || cls.includes('TextEncode') || title.includes('KSampler'))) {
+      node.inputs.seed = seed
+    }
+    if ('noise_seed' in node.inputs && (
+      cls === 'RandomNoise' ||
+      title.includes('RandomNoise') ||
+      (cls.includes('Sampler') && node.inputs.add_noise !== 'disable')
+    )) {
+      node.inputs.noise_seed = seed
+    }
+
+    if (cls === 'ResolutionSelector') {
+      if ('aspect_ratio' in node.inputs) node.inputs.aspect_ratio = resolveImageAspectRatioLabel(numericWidth, numericHeight)
+      if ('megapixels' in node.inputs) node.inputs.megapixels = Math.max(0.5, Math.round((numericWidth * numericHeight) / 100000) / 10)
+    }
+
+    const canSetDirectSize = (
+      cls.includes('Empty') ||
+      cls.includes('Latent') ||
+      cls.includes('Scheduler')
+    )
+    if (canSetDirectSize && typeof node.inputs.width === 'number') node.inputs.width = numericWidth
+    if (canSetDirectSize && typeof node.inputs.height === 'number') node.inputs.height = numericHeight
+    if (cls === 'PrimitiveInt' && lowerTitle === 'width' && 'value' in node.inputs) node.inputs.value = numericWidth
+    if (cls === 'PrimitiveInt' && lowerTitle === 'height' && 'value' in node.inputs) node.inputs.value = numericHeight
+
+    if ((cls === 'PrimitiveFloat' || cls === 'PrimitiveInt') && /frame rate|fps/i.test(title) && 'value' in node.inputs) {
+      node.inputs.value = numericFps
+    }
+    if ((cls === 'PrimitiveFloat' || cls === 'PrimitiveInt') && /duration/i.test(title) && 'value' in node.inputs) {
+      node.inputs.value = numericDuration
+    }
+    if (cls === 'CreateVideo' && typeof node.inputs.fps === 'number') {
+      node.inputs.fps = numericFps
+    }
+    if (cls === 'HunyuanVideo15ImageToVideo' && 'length' in node.inputs) {
+      node.inputs.length = frameCount
+    }
+  }
+
+  return modified
+}
+
+export function modifyFrameInterpolationWorkflow(workflow, options = {}) {
+  const {
+    inputVideo = '',
+    interpolationMultiplier = 4,
+    enableFpsMultiplier = false,
+    filenamePrefix = 'video/frame_interpolation',
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const safeMultiplier = Math.max(2, Math.min(16, Math.round(Number(interpolationMultiplier) || 4)))
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+    const cls = String(node.class_type || '')
+    const title = String(node?._meta?.title || '')
+
+    if (inputVideo && cls === 'LoadVideo' && 'file' in node.inputs) {
+      node.inputs.file = inputVideo
+    }
+    if (cls === 'PrimitiveInt' && /multiplier/i.test(title) && 'value' in node.inputs) {
+      node.inputs.value = safeMultiplier
+    }
+    if (cls === 'PrimitiveBoolean' && /apply multiplier to fps/i.test(title) && 'value' in node.inputs) {
+      node.inputs.value = Boolean(enableFpsMultiplier)
+    }
+    if (cls === 'SaveVideo' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix
     }
   }
 
@@ -1533,6 +1758,166 @@ export function modifySeedream5LiteImageEditWorkflow(workflow, options = {}) {
     _meta: { title: 'Batch Images' },
   }
   seedreamNode.inputs.image = [batchNodeId, 0]
+
+  return modified
+}
+
+export function modifyOpenAIGPTImage2Workflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    inputImage = '',
+    seed = Math.floor(Math.random() * 1000000000000),
+    width = 1024,
+    height = 1024,
+    model = 'gpt-image-2',
+    quality = null,
+    filenamePrefix = 'image/gpt_image_2',
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const size = `${Math.max(256, Math.round(Number(width) || 1024))}x${Math.max(256, Math.round(Number(height) || 1024))}`
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+
+    if (node.class_type === 'OpenAIGPTImage1') {
+      if ('prompt' in node.inputs && typeof node.inputs.prompt === 'string') node.inputs.prompt = prompt
+      if ('seed' in node.inputs) node.inputs.seed = seed
+      if ('size' in node.inputs) node.inputs.size = size
+      if ('model' in node.inputs) node.inputs.model = model
+      if (quality && 'quality' in node.inputs) node.inputs.quality = quality
+    }
+
+    if (node.class_type === 'StringReplace' && typeof node.inputs.string === 'string') {
+      node.inputs.string = prompt
+    }
+
+    if (inputImage && node.class_type === 'LoadImage' && 'image' in node.inputs) {
+      node.inputs.image = inputImage
+    }
+
+    if (node.class_type === 'SaveImage' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'image/gpt_image_2'
+    }
+  }
+
+  return modified
+}
+
+function resolveSeedanceResolution(height) {
+  const numericHeight = Number(height)
+  return Number.isFinite(numericHeight) && numericHeight >= 1080 ? '1080p' : '720p'
+}
+
+function applySeedanceCommonInputs(node, {
+  prompt,
+  width,
+  height,
+  duration,
+  seed,
+  generateAudio = true,
+}) {
+  if (!node?.inputs) return
+  if ('model.prompt' in node.inputs) node.inputs['model.prompt'] = prompt
+  if ('model.resolution' in node.inputs) node.inputs['model.resolution'] = resolveSeedanceResolution(height)
+  if ('model.ratio' in node.inputs) node.inputs['model.ratio'] = resolveClosestAspectRatio(width, height)
+  if ('model.duration' in node.inputs) node.inputs['model.duration'] = Math.max(1, Math.round(Number(duration) || 5))
+  if ('model.generate_audio' in node.inputs) node.inputs['model.generate_audio'] = Boolean(generateAudio)
+  if ('seed' in node.inputs) node.inputs.seed = seed
+  if ('watermark' in node.inputs) node.inputs.watermark = false
+}
+
+export function modifySeedance2Workflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    width = 1280,
+    height = 720,
+    duration = 5,
+    seed = Math.floor(Math.random() * 1000000000000),
+    filenamePrefix = 'video/seedance2',
+    assetFilenames = {},
+    generateAudio = true,
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const firstFrame = assetFilenames.firstFrameAsset || ''
+  const lastFrame = assetFilenames.lastFrameAsset || ''
+  const referenceImages = [
+    assetFilenames.referenceImage1,
+    assetFilenames.referenceImage2,
+    assetFilenames.referenceImage3,
+    assetFilenames.referenceImage4,
+  ]
+
+  for (const [nodeId, node] of Object.entries(modified)) {
+    if (!node?.inputs) continue
+
+    if (
+      node.class_type === 'ByteDance2TextToVideoNode' ||
+      node.class_type === 'ByteDance2FirstLastFrameNode' ||
+      node.class_type === 'ByteDance2ReferenceNode'
+    ) {
+      applySeedanceCommonInputs(node, { prompt, width, height, duration, seed, generateAudio })
+
+      if (node.class_type === 'ByteDance2FirstLastFrameNode') {
+        if (firstFrame && Array.isArray(node.inputs.first_frame)) {
+          const loadNode = modified[String(node.inputs.first_frame[0])]
+          if (loadNode?.inputs && 'image' in loadNode.inputs) loadNode.inputs.image = firstFrame
+        }
+        if (lastFrame && Array.isArray(node.inputs.last_frame)) {
+          const loadNode = modified[String(node.inputs.last_frame[0])]
+          if (loadNode?.inputs && 'image' in loadNode.inputs) loadNode.inputs.image = lastFrame
+        }
+      }
+
+      if (node.class_type === 'ByteDance2ReferenceNode') {
+        referenceImages.forEach((filename, index) => {
+          const inputKey = `model.reference_images.image_${index + 1}`
+          if (!filename) {
+            if (inputKey in node.inputs) delete node.inputs[inputKey]
+            return
+          }
+          if (!Array.isArray(node.inputs[inputKey])) return
+          const loadNode = modified[String(node.inputs[inputKey][0])]
+          if (loadNode?.inputs && 'image' in loadNode.inputs) loadNode.inputs.image = filename
+        })
+      }
+    }
+
+    if (node.class_type === 'SaveVideo' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'video/seedance2'
+    }
+  }
+
+  return modified
+}
+
+export function modifySoniloVideoToMusicWorkflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    inputVideo = '',
+    seed = Math.floor(Math.random() * 1000000000000),
+    filenamePrefix = 'audio/sonilo',
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+
+    if (node.class_type === 'SoniloVideoToMusic') {
+      if ('prompt' in node.inputs) node.inputs.prompt = prompt
+      if ('seed' in node.inputs) node.inputs.seed = seed
+    }
+
+    if (inputVideo && node.class_type === 'LoadVideo' && 'file' in node.inputs) {
+      node.inputs.file = inputVideo
+    }
+
+    if (node.class_type === 'SaveAudioMP3' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'audio/sonilo'
+    }
+  }
 
   return modified
 }

@@ -1,21 +1,18 @@
 /**
  * ComfyUI-tab auto-import bridge.
  *
- * Listens for `execution_success` events on the ComfyUI websocket and,
- * for every prompt that wasn't queued by ComfyStudio's own managed
- * workflow pipeline, pulls the resulting output files into the current
- * project's `Imported from ComfyUI/` folder. This means users can run
- * whatever custom workflow they like in the embedded ComfyUI tab (or
- * even from an external ComfyUI browser tab pointed at the same
- * instance) and have the output show up in the asset panel automatically,
- * without any custom nodes.
+ * Listens for ComfyUI websocket activity and, for eligible prompts that
+ * weren't queued by ComfyStudio's own managed workflow pipeline, pulls the
+ * resulting output files into the current project's `Imported from ComfyUI/`
+ * folder. Eligibility is provided by the app shell, currently meaning prompts
+ * observed while the embedded ComfyUI tab is active.
  *
  * Design (user-confirmed):
- *   - Trigger:    per-prompt `execution_success`
+ *   - Trigger:    status/executing websocket events for eligible prompts
  *   - Scope:      only `type: "output"` files
- *   - Who:        all prompts on this ComfyUI instance, with
- *                 filename+subfolder+mtime dedupe AND a prompt-ID
- *                 guard that skips anything GenerateWorkspace queued.
+ *   - Who:        unmanaged prompts observed through the embedded ComfyUI tab,
+ *                 with filename+subfolder+mtime dedupe AND a prompt-ID guard
+ *                 that skips anything GenerateWorkspace queued.
  *   - Destination: `Imported from ComfyUI/{Images,Videos,Audio}`
  *                 (virtual asset folders — same mechanism GenerateWorkspace
  *                 uses for `Generated/...`).
@@ -71,6 +68,9 @@ function appendLauncherLog(stream, text) {
 const MAX_SIGNATURES = 2000
 const importedSignatures = new Set()
 const COMFYSTUDIO_MANAGED_OUTPUT_RE = /^(director_job_|comfystudio_job_|flow_ai_|topaz_video_upscale_|ComfyStudioMask_)/i
+const MAX_ELIGIBLE_PROMPT_IDS = 300
+const eligibleUnmanagedPromptIds = new Set()
+let runtimeOptions = {}
 
 function markSignature(sig) {
   if (!sig) return false
@@ -81,6 +81,40 @@ function markSignature(sig) {
     if (first) importedSignatures.delete(first)
   }
   return false
+}
+
+function canObserveUnmanagedPrompts(meta = {}) {
+  const shouldImportUnmanagedPrompt = runtimeOptions?.shouldImportUnmanagedPrompt
+  if (typeof shouldImportUnmanagedPrompt !== 'function') return true
+  try {
+    return shouldImportUnmanagedPrompt(meta) === true
+  } catch (_) {
+    return false
+  }
+}
+
+function rememberEligibleUnmanagedPrompt(promptId) {
+  if (!promptId) return false
+  if (isPromptHandledByApp(promptId)) return false
+  const pidKey = String(promptId)
+  eligibleUnmanagedPromptIds.add(pidKey)
+  while (eligibleUnmanagedPromptIds.size > MAX_ELIGIBLE_PROMPT_IDS) {
+    const first = eligibleUnmanagedPromptIds.values().next().value
+    if (first) eligibleUnmanagedPromptIds.delete(first)
+    else break
+  }
+  return true
+}
+
+function isEligibleUnmanagedPrompt(promptId) {
+  if (!promptId) return false
+  if (isPromptHandledByApp(promptId)) return false
+  if (eligibleUnmanagedPromptIds.has(String(promptId))) return true
+
+  // Preserve the old always-on behavior if startComfyAutoImport is used
+  // without a scope provider. The app passes one so browser/other-project
+  // runs are no longer pulled in from the global history ring.
+  return typeof runtimeOptions?.shouldImportUnmanagedPrompt !== 'function'
 }
 function sigFor(fileDesc) {
   if (!fileDesc?.filename) return null
@@ -382,7 +416,9 @@ const seenPromptIds = new Set()
 
 function rememberSeenPrompt(promptId) {
   if (!promptId) return
-  seenPromptIds.add(String(promptId))
+  const pidKey = String(promptId)
+  seenPromptIds.add(pidKey)
+  eligibleUnmanagedPromptIds.delete(pidKey)
   if (seenPromptIds.size > MAX_SEEN_PROMPT_IDS) {
     const first = seenPromptIds.values().next().value
     if (first) seenPromptIds.delete(first)
@@ -393,6 +429,10 @@ async function handlePromptSuccess(promptId, preFetchedEntry = null) {
   if (!promptId) return
   if (!isAutoImportEnabled()) return
   if (isPromptHandledByApp(promptId)) {
+    rememberSeenPrompt(promptId)
+    return
+  }
+  if (!isEligibleUnmanagedPrompt(promptId)) {
     rememberSeenPrompt(promptId)
     return
   }
@@ -763,13 +803,11 @@ async function importStitchedSequence({ classification, apiWorkflow, promptId, p
 //   - `progress` during sampling (broadcast=True)
 //   - `status`   whenever the queue changes (queue_updated)
 //
-// We use the `status` broadcast as our primary completion trigger:
-// whenever the queue changes we fetch `/history` and process any
-// successful prompts we haven't seen yet. `execution_success` stays as
-// a fast path for the same-client case (e.g. a caption-transcribe job
-// queued through ComfyStudio's own client but not via GenerateWorkspace).
-// `executing` is a secondary nudge — if a new prompt ID shows up
-// mid-execution, the next `status` will cover it.
+// We use broadcast `executing` events to claim prompt IDs only while the
+// app shell says the embedded ComfyUI tab is active, then use `status` as
+// the completion trigger to fetch `/history` for those claimed prompts.
+// This avoids importing unrelated runs from an external browser or another
+// project that happens to share the same ComfyUI server.
 
 let started = false
 const detachers = []
@@ -787,6 +825,7 @@ const MIN_SCAN_INTERVAL_MS = 400
 async function scanRecentHistoryForCompletions() {
   if (!isAutoImportEnabled()) return
   if (!currentProjectHandle()) return
+  if (typeof runtimeOptions?.shouldImportUnmanagedPrompt === 'function' && eligibleUnmanagedPromptIds.size === 0) return
   const now = Date.now()
   if (now - lastScanAt < MIN_SCAN_INTERVAL_MS) return
   lastScanAt = now
@@ -816,6 +855,10 @@ async function scanRecentHistoryForCompletions() {
       continue
     }
     if (status.status_str !== 'success') continue
+    if (!isEligibleUnmanagedPrompt(pidKey)) {
+      rememberSeenPrompt(pidKey)
+      continue
+    }
 
     // Fire and forget per prompt; handlePromptSuccess serializes
     // on inFlightByPromptId so concurrent scans are safe.
@@ -833,18 +876,24 @@ function scheduleScan() {
   }, SCAN_DEBOUNCE_MS)
 }
 
-export function startComfyAutoImport() {
+export function startComfyAutoImport(options = {}) {
   if (started) return stopComfyAutoImport
   started = true
+  runtimeOptions = options && typeof options === 'object' ? options : {}
 
   // Primary trigger: broadcast `status` event fires on every queue
-  // change (enqueue + task_done) from any client.
+  // change (enqueue + task_done). We only scan after seeing an eligible
+  // unmanaged prompt ID, otherwise ComfyUI's global history can include
+  // unrelated browser/other-project runs.
   const onStatus = () => scheduleScan()
 
   // Secondary trigger: same-client execution_success.
   const onSuccess = (evt) => {
     const promptId = evt?.promptId
     if (!promptId) return
+    if (canObserveUnmanagedPrompts({ promptId, event: 'execution_success' })) {
+      rememberEligibleUnmanagedPrompt(promptId)
+    }
     handlePromptSuccess(promptId).catch((err) => {
       console.warn('[comfyAutoImport] handlePromptSuccess threw:', err)
     })
@@ -853,9 +902,16 @@ export function startComfyAutoImport() {
     scheduleScan()
   }
 
-  // Tertiary: if *anything* is executing we might have just missed a
-  // status broadcast. A cheap scheduleScan() nudges the debouncer.
-  const onExecuting = () => scheduleScan()
+  // Tertiary: `executing` is broadcast and carries the prompt id, so this
+  // is where we claim custom ComfyUI-tab runs without claiming every prompt
+  // in the shared ComfyUI history.
+  const onExecuting = (evt) => {
+    const promptId = evt?.promptId
+    if (promptId && canObserveUnmanagedPrompts({ promptId, event: 'executing' })) {
+      rememberEligibleUnmanagedPrompt(promptId)
+    }
+    scheduleScan()
+  }
 
   try { comfyui.on('status', onStatus) } catch (_) { /* ignore */ }
   try { comfyui.on('execution_success', onSuccess) } catch (_) { /* ignore */ }
@@ -869,10 +925,6 @@ export function startComfyAutoImport() {
     () => { try { comfyui.off('complete', onExecuting) } catch (_) { /* ignore */ } },
   )
 
-  // Kick one initial scan shortly after startup to import anything that
-  // finished before the app was fully ready (rare but possible).
-  scheduleScan()
-
   return stopComfyAutoImport
 }
 
@@ -883,6 +935,8 @@ export function stopComfyAutoImport() {
     clearTimeout(scanTimer)
     scanTimer = null
   }
+  runtimeOptions = {}
+  eligibleUnmanagedPromptIds.clear()
   while (detachers.length) {
     const fn = detachers.pop()
     try { fn?.() } catch (_) { /* ignore */ }

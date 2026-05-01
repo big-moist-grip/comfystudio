@@ -625,7 +625,7 @@ function GeneralTab({ initialSection = null }) {
             <div className="pr-4">
               <label className="text-sm text-sf-text-primary">Auto-import ComfyUI tab generations</label>
               <p className="text-[10px] text-sf-text-muted">
-                When enabled, any successful prompt run on your ComfyUI instance (including custom workflows run from the ComfyUI tab) is automatically imported into the current project&apos;s <span className="text-sf-text-secondary">Imported from ComfyUI/</span> folder. Detected frame sequences are stitched into a single MP4 at the project&apos;s framerate.
+                When enabled, successful custom prompts observed while the embedded ComfyUI tab is active are imported into the current project&apos;s <span className="text-sf-text-secondary">Imported from ComfyUI/</span> folder. Detected frame sequences are stitched into a single MP4 at the project&apos;s framerate.
               </p>
             </div>
             <button

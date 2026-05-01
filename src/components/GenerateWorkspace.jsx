@@ -8,6 +8,9 @@ import { jsPDF } from 'jspdf'
 import ImageAnnotationModal from './ImageAnnotationModal'
 import ConfirmDialog from './ConfirmDialog'
 import ApiKeyDialog from './ApiKeyDialog'
+import AdEasyMode from './generate/AdEasyMode'
+import WorkflowBrowser from './generate/WorkflowBrowser'
+import WorkflowDetail from './generate/WorkflowDetail'
 import { COMFY_PARTNER_KEY_CHANGED_EVENT } from '../services/comfyPartnerAuth'
 import useComfyUI from '../hooks/useComfyUI'
 import useAssetsStore from '../stores/assetsStore'
@@ -40,6 +43,10 @@ import {
   startComfyLauncher,
   subscribeComfyLauncherState,
 } from '../services/comfyLauncher'
+import {
+  GENERATE_WORKFLOW_CATALOG,
+  getWorkflowManifestByWorkflowId,
+} from '../config/generateWorkflowCatalog'
 import {
   ACTIVE_JOB_STATUSES,
   CATEGORY_ORDER,
@@ -101,6 +108,7 @@ import {
   resolveMusicVideoShotTypeFromText,
   splitCastNameList,
 } from '../config/musicVideoShotConfig'
+import { TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID } from '../config/topazVideoUpscaleConfig'
 
 const CATEGORY_ICONS = { video: Video, image: ImageIcon, audio: Music }
 const DIRECTOR_SUBTABS = [
@@ -129,6 +137,8 @@ const DIRECTOR_SUBTABS = [
 const SINGLE_VIDEO_WORKFLOW_IDS = new Set([
   'wan22-i2v',
   'ltx23-i2v',
+  'ltx23-ia2v',
+  'frame-interpolation',
   'kling-o3-i2v',
   'grok-video-i2v',
   'vidu-q2-i2v',
@@ -163,7 +173,7 @@ const YOLO_AD_STAGE_TIER_OPTIONS = Object.freeze({
   ]),
 })
 
-const DIRECTOR_VIDEO_FPS_OPTIONS = Object.freeze([16, 24, 30])
+const DIRECTOR_VIDEO_FPS_OPTIONS = Object.freeze([24, 25, 30])
 const IMAGE_RESOLUTION_PRESET_GROUPS = Object.freeze({
   standard: Object.freeze([
     { id: 'landscape_720', label: '720p Landscape', width: 1280, height: 720 },
@@ -409,12 +419,20 @@ function sanitizeAssetSnapshotForStorage(asset) {
 
 function sanitizeGenerationJobForStorage(job) {
   if (!job?.id) return null
+  const assetFields = job.sourceAssets?.assetFields && typeof job.sourceAssets.assetFields === 'object'
+    ? Object.fromEntries(
+      Object.entries(job.sourceAssets.assetFields)
+        .map(([key, asset]) => [key, sanitizeAssetSnapshotForStorage(asset)])
+        .filter(([, asset]) => Boolean(asset))
+    )
+    : null
   const sourceAssets = job.sourceAssets && typeof job.sourceAssets === 'object'
     ? {
       input: sanitizeAssetSnapshotForStorage(job.sourceAssets.input),
       reference1: sanitizeAssetSnapshotForStorage(job.sourceAssets.reference1),
       reference2: sanitizeAssetSnapshotForStorage(job.sourceAssets.reference2),
       audio: sanitizeAssetSnapshotForStorage(job.sourceAssets.audio),
+      assetFields,
     }
     : null
 
@@ -433,6 +451,13 @@ function normalizePersistedGenerationJob(job) {
   const status = job.status === 'paused'
     ? 'paused'
     : 'queued'
+  const assetFields = job.sourceAssets?.assetFields && typeof job.sourceAssets.assetFields === 'object'
+    ? Object.fromEntries(
+      Object.entries(job.sourceAssets.assetFields)
+        .map(([key, asset]) => [key, sanitizeAssetSnapshotForStorage(asset)])
+        .filter(([, asset]) => Boolean(asset))
+    )
+    : null
 
   return {
     ...job,
@@ -443,6 +468,7 @@ function normalizePersistedGenerationJob(job) {
         reference1: sanitizeAssetSnapshotForStorage(job.sourceAssets.reference1),
         reference2: sanitizeAssetSnapshotForStorage(job.sourceAssets.reference2),
         audio: sanitizeAssetSnapshotForStorage(job.sourceAssets.audio),
+        assetFields,
       }
       : null,
     status,
@@ -1763,34 +1789,145 @@ function CinematographyTags({ onAddTag, selectedTags, onRemoveTag }) {
 // ============================================
 // Asset Input Browser (left column)
 // ============================================
-function AssetInputBrowser({ selectedAsset, onSelectAsset, filterType, frameTime, onFrameTimeChange }) {
-  const { assets } = useAssetsStore()
+function AssetInputBrowser({
+  selectedAsset,
+  onSelectAsset,
+  filterType,
+  frameTime,
+  onFrameTimeChange,
+  assetSlots = [],
+  activeSlotId = 'asset',
+  onActiveSlotChange = null,
+  selectedAssetFields = {},
+  onSelectAssetField = null,
+}) {
+  const { assets, folders } = useAssetsStore()
   const [search, setSearch] = useState('')
+  const [currentFolderId, setCurrentFolderId] = useState(null)
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
 
-  // Filter assets based on workflow needs
-  const filtered = useMemo(() => {
-    let list = assets.filter(a => a.type !== 'mask')
-    if (filterType === 'image') {
-      list = list.filter(a => a.type === 'image' || a.type === 'video')
-    } else if (filterType === 'video') {
-      list = list.filter(a => a.type === 'video')
-    } else if (filterType === 'audio') {
-      list = list.filter(a => a.type === 'audio')
+  const normalizedSearch = search.trim().toLowerCase()
+  const activeSlot = assetSlots.find((slot) => slot.id === activeSlotId) || assetSlots[0] || {
+    id: 'asset',
+    label: 'Input asset',
+    assetType: filterType,
+    isPrimary: true,
+  }
+  const selectedAssetForActiveSlot = activeSlot.isPrimary
+    ? selectedAsset
+    : (selectedAssetFields?.[activeSlot.id] || null)
+
+  const handleSelectAssetForActiveSlot = useCallback((asset) => {
+    if (activeSlot.isPrimary || activeSlot.id === 'asset') {
+      onSelectAsset(asset)
+      return
     }
-    if (search) {
-      list = list.filter(a => a.name.toLowerCase().includes(search.toLowerCase()))
+    onSelectAssetField?.(activeSlot.id, asset)
+  }, [activeSlot.id, activeSlot.isPrimary, onSelectAsset, onSelectAssetField])
+
+  const isCompatibleAsset = useCallback((asset) => {
+    if (!asset || asset.type === 'mask') return false
+    if (activeSlot && !activeSlot.isPrimary && activeSlot.assetType) return asset.type === activeSlot.assetType
+    if (filterType === 'image') return asset.type === 'image' || asset.type === 'video'
+    if (filterType === 'video') return asset.type === 'video'
+    if (filterType === 'audio') return asset.type === 'audio'
+    return true
+  }, [activeSlot, filterType])
+
+  const compatibleAssets = useMemo(
+    () => assets.filter(isCompatibleAsset),
+    [assets, isCompatibleAsset]
+  )
+
+  const folderById = useMemo(() => {
+    const map = new Map()
+    ;(folders || []).forEach((folder) => {
+      if (folder?.id) map.set(folder.id, folder)
+    })
+    return map
+  }, [folders])
+
+  const foldersByParent = useMemo(() => {
+    const map = new Map()
+    ;(folders || []).forEach((folder) => {
+      const parentId = folder?.parentId || null
+      const next = map.get(parentId) || []
+      next.push(folder)
+      map.set(parentId, next)
+    })
+    for (const list of map.values()) {
+      list.sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')))
     }
-    return list
-  }, [assets, filterType, search])
+    return map
+  }, [folders])
+
+  const getFolderPath = useCallback((folderId = currentFolderId) => {
+    const path = []
+    let cursor = folderId
+    const visited = new Set()
+    while (cursor && !visited.has(cursor)) {
+      visited.add(cursor)
+      const folder = folderById.get(cursor)
+      if (!folder) break
+      path.unshift(folder)
+      cursor = folder.parentId || null
+    }
+    return path
+  }, [currentFolderId, folderById])
+
+  const getDescendantFolderIds = useCallback((folderId) => {
+    const ids = []
+    const walk = (parentId) => {
+      const children = foldersByParent.get(parentId) || []
+      for (const child of children) {
+        if (!child?.id) continue
+        ids.push(child.id)
+        walk(child.id)
+      }
+    }
+    walk(folderId || null)
+    return ids
+  }, [foldersByParent])
+
+  const getFolderAssetCount = useCallback((folderId) => {
+    const folderIds = new Set([folderId || null, ...getDescendantFolderIds(folderId)])
+    return compatibleAssets.filter((asset) => folderIds.has(asset.folderId || null)).length
+  }, [compatibleAssets, getDescendantFolderIds])
+
+  useEffect(() => {
+    if (currentFolderId && !folderById.has(currentFolderId)) {
+      setCurrentFolderId(null)
+    }
+  }, [currentFolderId, folderById])
+
+  const currentSubfolders = useMemo(
+    () => normalizedSearch ? [] : (foldersByParent.get(currentFolderId || null) || []),
+    [currentFolderId, foldersByParent, normalizedSearch]
+  )
+
+  const visibleAssets = useMemo(() => {
+    if (normalizedSearch) {
+      return compatibleAssets.filter((asset) => {
+        const nameMatches = String(asset.name || '').toLowerCase().includes(normalizedSearch)
+        const pathMatches = getFolderPath(asset.folderId || null)
+          .some((folder) => String(folder.name || '').toLowerCase().includes(normalizedSearch))
+        return nameMatches || pathMatches
+      })
+    }
+    return compatibleAssets.filter((asset) => (asset.folderId || null) === (currentFolderId || null))
+  }, [compatibleAssets, currentFolderId, getFolderPath, normalizedSearch])
+
+  const assetTypeLabel = filterType === 'image'
+    ? 'image/video'
+    : filterType || 'media'
 
   // When video loads, seek to frameTime
   useEffect(() => {
-    if (videoRef.current && selectedAsset?.type === 'video') {
+    if (videoRef.current && selectedAssetForActiveSlot?.type === 'video') {
       videoRef.current.currentTime = frameTime || 0
     }
-  }, [frameTime, selectedAsset])
+  }, [frameTime, selectedAssetForActiveSlot])
 
   const handleVideoSeeked = () => {
     // Draw current frame to canvas for preview
@@ -1815,16 +1952,82 @@ function AssetInputBrowser({ selectedAsset, onSelectAsset, filterType, frameTime
             className="w-full pl-7 pr-2 py-1 bg-sf-dark-800 border border-sf-dark-600 rounded text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
           />
         </div>
+        <div className="mt-2 flex items-center gap-1 overflow-x-auto text-[10px]">
+          <button
+            type="button"
+            onClick={() => setCurrentFolderId(null)}
+            className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors ${
+              !currentFolderId && !normalizedSearch ? 'bg-sf-accent/15 text-sf-accent' : 'text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary'
+            }`}
+          >
+            <FolderOpen className="h-3 w-3" />
+            Assets
+          </button>
+          {getFolderPath().map((folder) => (
+            <div key={folder.id} className="flex items-center gap-1">
+              <ChevronRight className="h-3 w-3 flex-shrink-0 text-sf-text-muted" />
+              <button
+                type="button"
+                onClick={() => setCurrentFolderId(folder.id)}
+                className={`max-w-[120px] truncate rounded px-1.5 py-0.5 transition-colors ${
+                  folder.id === currentFolderId && !normalizedSearch ? 'bg-sf-accent/15 text-sf-accent' : 'text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary'
+                }`}
+              >
+                {folder.name}
+              </button>
+            </div>
+          ))}
+        </div>
+        {normalizedSearch && (
+          <div className="mt-1 text-[9px] text-sf-text-muted">
+            Searching all folders
+          </div>
+        )}
+        {assetSlots.length > 0 && (
+          <div className="mt-2 space-y-1">
+            <div className="text-[9px] uppercase tracking-wider text-sf-text-muted">
+              Assign selected asset to
+            </div>
+            <div className="grid grid-cols-1 gap-1">
+              {assetSlots.map((slot) => {
+                const slotAsset = slot.isPrimary ? selectedAsset : selectedAssetFields?.[slot.id]
+                const isActive = activeSlot.id === slot.id
+                return (
+                  <button
+                    key={slot.id}
+                    type="button"
+                    onClick={() => onActiveSlotChange?.(slot.id)}
+                    className={`rounded border px-2 py-1 text-left transition-colors ${
+                      isActive
+                        ? 'border-sf-accent bg-sf-accent/15 text-sf-accent'
+                        : 'border-sf-dark-700 bg-sf-dark-800/70 text-sf-text-muted hover:border-sf-dark-500 hover:text-sf-text-primary'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-[10px] font-medium">{slot.label}</span>
+                      <span className="shrink-0 text-[8px] uppercase opacity-70">{slot.assetType || 'media'}</span>
+                    </div>
+                    <div className={`mt-0.5 truncate text-[9px] ${slotAsset ? 'text-sf-text-secondary' : 'text-sf-text-muted'}`}>
+                      {slotAsset?.name || 'Nothing selected'}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Selected asset preview + frame grabber */}
-      {selectedAsset && (
+      {selectedAssetForActiveSlot && (
         <div className="flex-shrink-0 border-b border-sf-dark-700 p-2">
-          <div className="text-[10px] text-sf-text-muted mb-1">Selected: <span className="text-sf-text-primary">{selectedAsset.name}</span></div>
-          {selectedAsset.type === 'video' && filterType === 'image' ? (
+          <div className="text-[10px] text-sf-text-muted mb-1">
+            {activeSlot.label}: <span className="text-sf-text-primary">{selectedAssetForActiveSlot.name}</span>
+          </div>
+          {activeSlot.isPrimary && selectedAssetForActiveSlot.type === 'video' && filterType === 'image' ? (
             (() => {
-              const durationSec = selectedAsset.duration ?? selectedAsset.settings?.duration ?? 5
-              const fps = selectedAsset.fps ?? selectedAsset.settings?.fps ?? 24
+              const durationSec = selectedAssetForActiveSlot.duration ?? selectedAssetForActiveSlot.settings?.duration ?? 5
+              const fps = selectedAssetForActiveSlot.fps ?? selectedAssetForActiveSlot.settings?.fps ?? 24
               const totalFrames = Math.max(0, Math.floor(durationSec * fps))
               const currentFrame = Math.min(totalFrames, Math.round((frameTime || 0) * fps))
               return (
@@ -1832,7 +2035,7 @@ function AssetInputBrowser({ selectedAsset, onSelectAsset, filterType, frameTime
                   <div className="relative aspect-video bg-sf-dark-800 rounded overflow-hidden">
                     <video
                       ref={videoRef}
-                      src={selectedAsset.url}
+                      src={selectedAssetForActiveSlot.url}
                       className="w-full h-full object-contain"
                       muted
                       onSeeked={handleVideoSeeked}
@@ -1858,33 +2061,74 @@ function AssetInputBrowser({ selectedAsset, onSelectAsset, filterType, frameTime
             })()
           ) : (
             <div className="aspect-video bg-sf-dark-800 rounded overflow-hidden">
-              {selectedAsset.type === 'video' ? (
-                <video src={selectedAsset.url} className="w-full h-full object-contain" muted />
-              ) : selectedAsset.type === 'image' ? (
-                <img src={selectedAsset.url} className="w-full h-full object-contain" alt={selectedAsset.name} />
+              {selectedAssetForActiveSlot.type === 'video' ? (
+                <video src={selectedAssetForActiveSlot.url} className="w-full h-full object-contain" muted />
+              ) : selectedAssetForActiveSlot.type === 'image' ? (
+                <img src={selectedAssetForActiveSlot.url} className="w-full h-full object-contain" alt={selectedAssetForActiveSlot.name} />
               ) : (
                 <div className="w-full h-full flex items-center justify-center"><Music className="w-8 h-8 text-sf-text-muted" /></div>
               )}
             </div>
           )}
-          <button onClick={() => onSelectAsset(null)} className="mt-1 text-[9px] text-sf-text-muted hover:text-sf-error">Clear selection</button>
+          <button onClick={() => handleSelectAssetForActiveSlot(null)} className="mt-1 text-[9px] text-sf-text-muted hover:text-sf-error">Clear selection</button>
         </div>
       )}
 
-      {/* Asset grid */}
+      {/* Folder-aware asset grid */}
       <div className="flex-1 overflow-auto p-2">
-        {filtered.length === 0 ? (
+        {currentFolderId && !normalizedSearch && (
+          <button
+            type="button"
+            onClick={() => setCurrentFolderId(folderById.get(currentFolderId)?.parentId || null)}
+            className="mb-2 flex w-full items-center gap-2 rounded border border-sf-dark-700 bg-sf-dark-800/70 px-2 py-1.5 text-left text-[10px] text-sf-text-secondary transition-colors hover:border-sf-dark-500 hover:text-sf-text-primary"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            Up one folder
+          </button>
+        )}
+
+        {currentSubfolders.length > 0 && (
+          <div className="mb-3 space-y-1">
+            {currentSubfolders.map((folder) => {
+              const count = getFolderAssetCount(folder.id)
+              return (
+                <button
+                  key={folder.id}
+                  type="button"
+                  onClick={() => setCurrentFolderId(folder.id)}
+                  className="flex w-full items-center gap-2 rounded border border-sf-dark-700 bg-sf-dark-800/70 px-2 py-1.5 text-left transition-colors hover:border-sf-dark-500 hover:bg-sf-dark-800"
+                >
+                  <FolderOpen className="h-4 w-4 flex-shrink-0 text-sf-accent" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[11px] font-medium text-sf-text-primary">{folder.name}</div>
+                    <div className="text-[9px] text-sf-text-muted">
+                      {count} matching {count === 1 ? 'asset' : 'assets'}
+                    </div>
+                  </div>
+                  <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-sf-text-muted" />
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        {visibleAssets.length === 0 && currentSubfolders.length === 0 ? (
           <div className="text-center py-8 text-sf-text-muted">
             <FolderOpen className="w-8 h-8 mx-auto mb-2 opacity-50" />
-            <p className="text-xs">{filterType ? `No ${filterType} assets` : 'No assets'}</p>
-            <p className="text-[10px]">Import media in the Assets tab</p>
+            <p className="text-xs">
+              {normalizedSearch ? 'No matching assets' : `No ${assetTypeLabel} assets here`}
+            </p>
+            <p className="text-[10px]">
+              {normalizedSearch ? 'Try a different search or folder name' : 'Open another folder or import media in the Assets tab'}
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-1.5">
-            {filtered.map(asset => {
-              const isSelected = selectedAsset?.id === asset.id
+            {visibleAssets.map(asset => {
+              const isSelected = selectedAssetForActiveSlot?.id === asset.id
+              const folderPath = getFolderPath(asset.folderId || null)
               return (
-                <button key={asset.id} onClick={() => onSelectAsset(asset)}
+                <button key={asset.id} onClick={() => handleSelectAssetForActiveSlot(asset)}
                   className={`bg-sf-dark-800 border rounded overflow-hidden text-left transition-all ${isSelected ? 'border-sf-accent ring-1 ring-sf-accent' : 'border-sf-dark-600 hover:border-sf-dark-500'}`}
                 >
                   <div className="aspect-video bg-sf-dark-700 flex items-center justify-center relative overflow-hidden">
@@ -1901,6 +2145,11 @@ function AssetInputBrowser({ selectedAsset, onSelectAsset, filterType, frameTime
                   </div>
                   <div className="px-1 py-0.5">
                     <p className="text-[9px] text-sf-text-primary truncate">{asset.name}</p>
+                    {normalizedSearch && folderPath.length > 0 && (
+                      <p className="text-[8px] text-sf-text-muted truncate">
+                        {folderPath.map((folder) => folder.name).join(' / ')}
+                      </p>
+                    )}
                   </div>
                 </button>
               )
@@ -1982,10 +2231,25 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   // Category + workflow selection
   const [category, setCategory] = useState(persistedState?.category || 'video')
   const [workflowId, setWorkflowId] = useState(persistedState?.workflowId || 'wan22-i2v')
+  const [selectedWorkflowManifestId, setSelectedWorkflowManifestId] = useState(persistedState?.selectedWorkflowManifestId || persistedState?.workflowId || 'wan22-i2v')
+  const [workflowRoute, setWorkflowRoute] = useState(() => (
+    getWorkflowManifestByWorkflowId(persistedState?.workflowId || 'wan22-i2v')?.route || 'local'
+  ))
+  const [workflowDetailOpen, setWorkflowDetailOpen] = useState(false)
+  const [latestWorkflowPreview, setLatestWorkflowPreview] = useState(null)
 
   // Input asset (store ID, will resolve to object)
   const [selectedAssetId, setSelectedAssetId] = useState(persistedState?.selectedAssetId || null)
   const [selectedAsset, setSelectedAsset] = useState(null)
+  const [selectedAudioAssetId, setSelectedAudioAssetId] = useState(persistedState?.selectedAudioAssetId || null)
+  const [selectedAudioAsset, setSelectedAudioAsset] = useState(null)
+  const [selectedAssetFieldIds, setSelectedAssetFieldIds] = useState(
+    persistedState?.selectedAssetFieldIds && typeof persistedState.selectedAssetFieldIds === 'object'
+      ? persistedState.selectedAssetFieldIds
+      : {}
+  )
+  const [selectedAssetFields, setSelectedAssetFields] = useState({})
+  const [activeAssetSlotId, setActiveAssetSlotId] = useState(persistedState?.activeAssetSlotId || 'asset')
   const [frameTime, setFrameTime] = useState(persistedState?.frameTime || 0)
 
   // Common generation state
@@ -1999,6 +2263,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const [resolution, setResolution] = useState(persistedState?.resolution || { width: 1280, height: 720 })
   const [imageResolution, setImageResolution] = useState(persistedState?.imageResolution || { width: 1280, height: 720 })
   const [fps, setFps] = useState(persistedState?.fps || 24)
+  const [interpolationMultiplier, setInterpolationMultiplier] = useState(persistedState?.interpolationMultiplier || 4)
+  const [enableFpsMultiplier, setEnableFpsMultiplier] = useState(persistedState?.enableFpsMultiplier || false)
   const [wanQualityPreset, setWanQualityPreset] = useState(persistedState?.wanQualityPreset || 'face-lock')
 
   // Image edit settings
@@ -2317,6 +2583,44 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }
   }, [selectedAssetId, assets])
 
+  useEffect(() => {
+    if (selectedAudioAssetId && assets.length > 0) {
+      const asset = assets.find(a => a.id === selectedAudioAssetId && a.type === 'audio')
+      if (asset) {
+        setSelectedAudioAsset(asset)
+      } else {
+        setSelectedAudioAssetId(null)
+        setSelectedAudioAsset(null)
+      }
+    } else if (!selectedAudioAssetId) {
+      setSelectedAudioAsset(null)
+    }
+  }, [selectedAudioAssetId, assets])
+
+  useEffect(() => {
+    const nextFields = {}
+    let changed = false
+    for (const [fieldId, assetId] of Object.entries(selectedAssetFieldIds || {})) {
+      if (!assetId) continue
+      const asset = assets.find((entry) => entry.id === assetId) || null
+      if (asset) {
+        nextFields[fieldId] = asset
+      } else {
+        changed = true
+      }
+    }
+    setSelectedAssetFields(nextFields)
+    if (changed) {
+      setSelectedAssetFieldIds((prev) => {
+        const nextIds = {}
+        for (const [fieldId, assetId] of Object.entries(prev || {})) {
+          if (assetId && assets.some((entry) => entry.id === assetId)) nextIds[fieldId] = assetId
+        }
+        return nextIds
+      })
+    }
+  }, [selectedAssetFieldIds, assets])
+
   // Persist state to localStorage whenever it changes
   useEffect(() => {
     try {
@@ -2324,7 +2628,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         generationMode,
         category,
         workflowId,
+        selectedWorkflowManifestId,
+        workflowRoute,
         selectedAssetId,
+        selectedAudioAssetId,
+        selectedAssetFieldIds,
+        activeAssetSlotId,
         frameTime,
         prompt,
         negativePrompt,
@@ -2334,6 +2643,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         resolution,
         imageResolution,
         fps,
+        interpolationMultiplier,
+        enableFpsMultiplier,
         wanQualityPreset,
         editSteps,
         editCfg,
@@ -2392,7 +2703,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     generationMode,
     category,
     workflowId,
+    selectedWorkflowManifestId,
+    workflowRoute,
     selectedAssetId,
+    selectedAudioAssetId,
+    selectedAssetFieldIds,
+    activeAssetSlotId,
     frameTime,
     prompt,
     negativePrompt,
@@ -2402,6 +2718,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     resolution,
     imageResolution,
     fps,
+    interpolationMultiplier,
+    enableFpsMultiplier,
     wanQualityPreset,
     editSteps,
     editCfg,
@@ -2542,10 +2860,47 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     () => currentCategoryWorkflows.find((workflow) => workflow.id === workflowId) || currentCategoryWorkflows[0],
     [currentCategoryWorkflows, workflowId]
   )
+  const activeWorkflowBrowserMode = generationMode === 'yolo' ? 'create' : 'generate'
+  const visibleWorkflowManifests = useMemo(() => (
+    GENERATE_WORKFLOW_CATALOG.filter((workflow) => (
+      workflow.mode === activeWorkflowBrowserMode && workflow.route === workflowRoute
+    ))
+  ), [activeWorkflowBrowserMode, workflowRoute])
+  const selectedWorkflowManifest = useMemo(() => (
+    GENERATE_WORKFLOW_CATALOG.find((workflow) => workflow.id === selectedWorkflowManifestId)
+      || getWorkflowManifestByWorkflowId(workflowId)
+      || visibleWorkflowManifests[0]
+      || null
+  ), [selectedWorkflowManifestId, visibleWorkflowManifests, workflowId])
+  const assetInputSlots = useMemo(() => (
+    (selectedWorkflowManifest?.fields || [])
+      .filter((field) => (
+        (field?.type === 'asset' || field?.type === 'assetSelect') &&
+        field.id !== 'audioAsset'
+      ))
+      .map((field) => ({
+        id: field.id || 'asset',
+        label: field.label || (field.id === 'asset' ? 'Input asset' : field.id),
+        assetType: field.assetType || selectedWorkflowManifest?.inputAssetType || 'image',
+        isPrimary: field.type === 'asset' || field.id === 'asset',
+      }))
+  ), [selectedWorkflowManifest])
+  const activeAssetSlot = useMemo(() => (
+    assetInputSlots.find((slot) => slot.id === activeAssetSlotId) || assetInputSlots[0] || null
+  ), [activeAssetSlotId, assetInputSlots])
+  const primaryAssetSlot = useMemo(() => (
+    assetInputSlots.find((slot) => slot.isPrimary) || null
+  ), [assetInputSlots])
   const videoDurationPresets = useMemo(
     () => getVideoDurationPresets(workflowId),
     [workflowId]
   )
+
+  useEffect(() => {
+    if (assetInputSlots.length === 0) return
+    if (assetInputSlots.some((slot) => slot.id === activeAssetSlotId)) return
+    setActiveAssetSlotId(assetInputSlots[0].id)
+  }, [activeAssetSlotId, assetInputSlots])
 
   const currentCategoryWorkflowGroups = useMemo(() => {
     const groups = {
@@ -2577,6 +2932,52 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }
   }, [currentCategoryWorkflows, workflowId])
 
+  const handleWorkflowManifestSelect = useCallback((manifest) => {
+    if (!manifest) return
+
+    setSelectedWorkflowManifestId(manifest.id)
+    setWorkflowRoute(manifest.route || 'local')
+    setFormError(null)
+    setWorkflowDetailOpen(true)
+
+    if (manifest.mode === 'create') {
+      setGenerationMode('yolo')
+      setYoloCreationType(String(manifest.title || '').toLowerCase().includes('music') ? 'music' : 'ad')
+      if (manifest.id === 'product-ad-easy-mode') {
+        setYoloAdStoryboardSource('cloud')
+        setYoloAdStoryboardTier('quality')
+        setYoloAdVideoSource('local')
+        setYoloAdVideoTier('quality')
+        setYoloAdLocalVideoWorkflowId('ltx23-i2v')
+        setYoloAnglesPerShot(1)
+        setYoloTakesPerAngle(1)
+        setYoloVideoFps(24)
+        setResolution({ width: 720, height: 1280 })
+        setImageResolution({ width: 720, height: 1280 })
+      }
+      return
+    }
+
+    setGenerationMode('single')
+    if (!manifest.runnable || !manifest.workflowId) {
+      setFormError('This workflow is in the catalog as a preview. Add its workflow graph and bindings before queueing it.')
+      return
+    }
+
+    const nextCategory = manifest.outputType === 'audio'
+      ? 'audio'
+      : manifest.outputType === 'image'
+        ? 'image'
+        : 'video'
+    setCategory(nextCategory)
+    setWorkflowId(manifest.workflowId)
+  }, [])
+
+  const handleWorkflowRouteChange = useCallback((nextRoute) => {
+    setWorkflowRoute(nextRoute)
+    setWorkflowDetailOpen(false)
+  }, [])
+
   useEffect(() => {
     if (generationMode !== 'single' || category !== 'video' || videoDurationPresets.length === 0) return
     if (videoDurationPresets.includes(Number(duration))) return
@@ -2587,7 +2988,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   }, [category, duration, generationMode, videoDurationPresets])
 
   useEffect(() => {
-    if (generationMode !== 'single' || category !== 'video' || workflowId === 'ltx23-i2v') return
+    if (generationMode !== 'single' || category !== 'video' || ['ltx23-i2v', 'ltx23-ia2v', 'ltx23-t2v'].includes(workflowId)) return
     if (resolution.width === 3840 && resolution.height === 2160) {
       setResolution({ width: 1920, height: 1080 })
     } else if (resolution.width === 2160 && resolution.height === 3840) {
@@ -2607,6 +3008,13 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   useEffect(() => {
     setOpenWorkflowHint('')
   }, [workflowId, generationMode, category])
+
+  useEffect(() => {
+    const manifest = getWorkflowManifestByWorkflowId(workflowId)
+    if (!manifest) return
+    setSelectedWorkflowManifestId(manifest.id)
+    setWorkflowRoute(manifest.route || 'local')
+  }, [workflowId])
 
   const runWorkflowDependencyCheck = useCallback(async () => {
     const requestVersion = dependencyCheckVersionRef.current + 1
@@ -2741,6 +3149,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const hasBlockingDependencies = generationMode === 'single' && dependencyCheck.hasBlockingIssues
   const isGenerateDisabled = (
     (!isConnected && !allowQueueWhileWaiting)
+    || (generationMode === 'single' && selectedWorkflowManifest && !selectedWorkflowManifest.runnable)
     || (generationMode === 'single' && (dependencyCheckInProgress || hasBlockingDependencies))
     || (generationMode === 'yolo' && yoloDependencyCheckInProgress)
   )
@@ -2757,6 +3166,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const isYoloMusicMode = generationMode === 'yolo' && yoloCreationType === 'music'
   const yoloModeKey = isYoloMusicMode ? 'music' : 'ad'
   const yoloModeLabel = isYoloMusicMode ? 'Music Video' : 'Ad'
+  const isAdEasyMode = generationMode === 'yolo'
+    && yoloCreationType === 'ad'
+    && selectedWorkflowManifest?.id === 'product-ad-easy-mode'
   // Active-target plan for music mode: null id → master, otherwise the alt
   // slot's own plan[]. Defined inline here (instead of reusing the richer
   // yoloMusicActiveAltScript memo below) to avoid a declaration-order
@@ -4265,19 +4677,28 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
   const createQueuedJob = useCallback((overrides = {}) => {
     const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const assetFieldIds = {}
+    for (const field of selectedWorkflowManifest?.fields || []) {
+      if (field?.type !== 'assetSelect' || field.id === 'audioAsset') continue
+      const assetId = selectedAssetFields[field.id]?.id || selectedAssetFieldIds[field.id] || null
+      if (assetId) assetFieldIds[field.id] = assetId
+    }
     const baseJob = {
       id: jobId,
       createdAt: Date.now(),
       category,
       workflowId,
-      workflowLabel: currentWorkflow?.label || workflowId,
-      needsImage: !!currentWorkflow?.needsImage,
+      workflowLabel: selectedWorkflowManifest?.title || currentWorkflow?.label || workflowId,
+      needsImage: !!(selectedWorkflowManifest?.needsImage ?? currentWorkflow?.needsImage),
+      inputAssetType: selectedWorkflowManifest?.inputAssetType || primaryAssetSlot?.assetType || ((selectedWorkflowManifest?.needsImage ?? currentWorkflow?.needsImage) ? 'image' : null),
       prompt: fullPrompt,
       negativePrompt,
       tags: selectedTags,
       seed,
       duration,
       fps,
+      interpolationMultiplier,
+      enableFpsMultiplier,
       resolution: category === 'image' ? effectiveImageResolution : resolution,
       wanQualityPreset,
       editSteps,
@@ -4289,6 +4710,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       keyscale,
       inputAssetId: selectedAsset?.id || null,
       inputAssetName: selectedAsset?.name || '',
+      audioAssetId: selectedWorkflowManifest?.requiresAudio ? (selectedAudioAsset?.id || null) : null,
+      audioAssetName: selectedWorkflowManifest?.requiresAudio ? (selectedAudioAsset?.name || '') : '',
+      assetFieldIds,
       inputFromTimelineFrame: false,
       referenceAssetId1: workflowId === 'image-edit' ? referenceAssetId1 : null,
       referenceAssetId2: workflowId === 'image-edit' ? referenceAssetId2 : null,
@@ -4305,6 +4729,11 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       if (!assetId) return null
       return snapshotGenerationAsset(assets.find((asset) => asset.id === assetId))
     }
+    const assetFieldSnapshots = Object.fromEntries(
+      Object.entries(baseJob.assetFieldIds || {})
+        .map(([fieldId, assetId]) => [fieldId, findAssetSnapshot(assetId)])
+        .filter(([, asset]) => Boolean(asset))
+    )
 
     return {
       ...baseJob,
@@ -4318,7 +4747,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         input: findAssetSnapshot(baseJob.inputAssetId),
         reference1: findAssetSnapshot(baseJob.referenceAssetId1),
         reference2: findAssetSnapshot(baseJob.referenceAssetId2),
-        audio: findAssetSnapshot(baseJob.musicAudioAssetId),
+        audio: findAssetSnapshot(baseJob.musicAudioAssetId || baseJob.audioAssetId),
+        assetFields: assetFieldSnapshots,
       },
     }
   }, [
@@ -4333,16 +4763,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     duration,
     editCfg,
     editSteps,
+    enableFpsMultiplier,
     effectiveImageResolution,
     fps,
     frameTime,
     fullPrompt,
     imageResolution,
+    interpolationMultiplier,
     keyscale,
     lyrics,
     musicDuration,
     musicTags,
     negativePrompt,
+    primaryAssetSlot?.assetType,
     referenceAssetId1,
     referenceAssetId2,
     resolution,
@@ -4350,8 +4783,17 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     seed,
     selectedAsset?.id,
     selectedAsset?.name,
+    selectedAssetFieldIds,
+    selectedAssetFields,
+    selectedAudioAsset?.id,
+    selectedAudioAsset?.name,
     seedreamUsesInputResolution,
     selectedTags,
+    selectedWorkflowManifest?.requiresAudio,
+    selectedWorkflowManifest?.inputAssetType,
+    selectedWorkflowManifest?.needsImage,
+    selectedWorkflowManifest?.fields,
+    selectedWorkflowManifest?.title,
     wanQualityPreset,
     workflowId,
   ])
@@ -5585,6 +6027,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       void handleQueueYoloStoryboards()
       return
     }
+    if (selectedWorkflowManifest && !selectedWorkflowManifest.runnable) {
+      setFormError('This workflow is in the catalog as a preview. Add its workflow graph and bindings before queueing it.')
+      return
+    }
     if (dependencyCheckInProgress) {
       setFormError('Checking workflow dependencies. Please wait a moment and try again.')
       return
@@ -5593,9 +6039,26 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       setFormError('Missing required workflow dependencies. Install the missing items listed below and re-check.')
       return
     }
-    const usingTimelineFrame = !!frameForAI?.file && isSingleVideoWorkflowId(workflowId)
-    if (currentWorkflow?.needsImage && !selectedAsset && !usingTimelineFrame) {
-      setFormError('Please select an input asset or use a timeline frame first')
+    const canUseTimelineFrame = isSingleVideoWorkflowId(workflowId)
+    const usingTimelineFrame = !!frameForAI?.file && canUseTimelineFrame
+    const requiresPrimaryAsset = Boolean(primaryAssetSlot) || (currentWorkflow?.needsImage && assetInputSlots.length === 0)
+    if (requiresPrimaryAsset && !selectedAsset && !usingTimelineFrame) {
+      const primaryLabel = primaryAssetSlot?.label || 'input asset'
+      setFormError(`Please select ${String(primaryLabel).toLowerCase()}${canUseTimelineFrame ? ' or use a timeline frame' : ''} first`)
+      return
+    }
+    if (selectedWorkflowManifest?.requiresAudio && !selectedAudioAsset) {
+      setFormError('Please select conditioning audio for this workflow first')
+      return
+    }
+    const missingRequiredAssetField = (selectedWorkflowManifest?.fields || []).find((field) => (
+      field?.type === 'assetSelect' &&
+      field.required &&
+      field.id !== 'audioAsset' &&
+      !selectedAssetFields[field.id]
+    ))
+    if (missingRequiredAssetField) {
+      setFormError(`Please select ${String(missingRequiredAssetField.label || missingRequiredAssetField.id).toLowerCase()} for this workflow first`)
       return
     }
 
@@ -5604,6 +6067,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     const job = createQueuedJob({
       inputAssetId: usingTimelineFrame ? null : (selectedAsset?.id || null),
       inputAssetName: usingTimelineFrame ? 'Timeline frame' : (selectedAsset?.name || ''),
+      audioAssetId: selectedWorkflowManifest?.requiresAudio ? (selectedAudioAsset?.id || null) : null,
+      audioAssetName: selectedWorkflowManifest?.requiresAudio ? (selectedAudioAsset?.name || '') : '',
       inputFromTimelineFrame: usingTimelineFrame,
       referenceAssetId1: workflowId === 'image-edit' ? referenceAssetId1 : null,
       referenceAssetId2: workflowId === 'image-edit' ? referenceAssetId2 : null,
@@ -6101,6 +6566,21 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     const jobFps = job?.fps
     const jobResolution = job?.resolution
     const jobSeed = job?.seed
+    const sanitizeFolderSegment = (value, fallback = 'Workflow') => {
+      const cleaned = String(value || fallback)
+        .replace(/[<>:"/\\|?*\u0000-\u001F]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+      return cleaned || fallback
+    }
+    const workflowFolderName = sanitizeFolderSegment(
+      job?.workflowLabel || getWorkflowDisplayLabel(job?.workflowId || wfId) || wfId,
+      'Workflow'
+    )
+    const generatedFolderPath = (kind) => [
+      ...(GENERATED_ASSET_FOLDERS[kind] || ['Generated']),
+      workflowFolderName,
+    ]
     const saveImportedAssetRecord = async (assetRecord, folderPathSegments) => {
       if (importsIntoActiveProject) {
         const addedAsset = addAsset(assetRecord)
@@ -6122,7 +6602,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         addComfyLog('status', `Skipped duplicate video import: ${result.filename}`)
         return { didImportAny: false, importedAssets }
       }
-      const generatedVideoFolderId = importsIntoActiveProject ? ensureAssetFolderPath(GENERATED_ASSET_FOLDERS.video) : null
+      const generatedVideoFolderPath = generatedFolderPath('video')
+      const generatedVideoFolderId = importsIntoActiveProject ? ensureAssetFolderPath(generatedVideoFolderPath) : null
       try {
         const videoFile = await comfyui.downloadVideo(result.filename, result.subfolder, result.outputType)
         const assetInfo = await importAsset(targetProjectHandle, videoFile, 'video')
@@ -6142,7 +6623,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             resolution: jobResolution ? `${jobResolution.width}x${jobResolution.height}` : undefined,
             seed: jobSeed
           }
-        }, GENERATED_ASSET_FOLDERS.video)
+        }, generatedVideoFolderPath)
         if (newAsset) importedAssets.push(newAsset)
         didImportAny = true
         if (isElectron() && importsIntoActiveProject && currentProjectHandle && newAsset?.absolutePath) {
@@ -6170,12 +6651,13 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       }
     } else if (result.type === 'images') {
       let generatedImageFolderId = null
+      const generatedImageFolderPath = generatedFolderPath('image')
       const imageItems = Array.isArray(result.items) ? result.items : []
       for (let imageIndex = 0; imageIndex < imageItems.length; imageIndex += 1) {
         const img = imageItems[imageIndex]
         if (markImportedSignature('image', img.filename, img.subfolder, img.outputType)) continue
         if (!generatedImageFolderId) {
-          generatedImageFolderId = importsIntoActiveProject ? ensureAssetFolderPath(GENERATED_ASSET_FOLDERS.image) : null
+          generatedImageFolderId = importsIntoActiveProject ? ensureAssetFolderPath(generatedImageFolderPath) : null
         }
         try {
           const imageFile = await comfyui.downloadImage(img.filename, img.subfolder, img.outputType)
@@ -6191,7 +6673,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             isImported: true,
             yolo: directorMeta || undefined,
             folderId: generatedImageFolderId,
-          }, GENERATED_ASSET_FOLDERS.image)
+          }, generatedImageFolderPath)
           if (newAsset) importedAssets.push(newAsset)
           didImportAny = true
         } catch (err) {
@@ -6216,7 +6698,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         addComfyLog('status', `Skipped duplicate audio import: ${result.filename}`)
         return { didImportAny: false, importedAssets }
       }
-      const generatedAudioFolderId = importsIntoActiveProject ? ensureAssetFolderPath(GENERATED_ASSET_FOLDERS.audio) : null
+      const generatedAudioFolderPath = generatedFolderPath('audio')
+      const generatedAudioFolderId = importsIntoActiveProject ? ensureAssetFolderPath(generatedAudioFolderPath) : null
       try {
         const url = comfyui.getMediaUrl(result.filename, result.subfolder, result.outputType)
         const resp = await fetch(url)
@@ -6233,7 +6716,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           isImported: true,
           folderId: generatedAudioFolderId,
           settings: { duration: job?.musicDuration, bpm: job?.bpm, keyscale: job?.keyscale }
-        }, GENERATED_ASSET_FOLDERS.audio)
+        }, generatedAudioFolderPath)
         if (newAsset) importedAssets.push(newAsset)
         didImportAny = true
       } catch (err) {
@@ -6255,22 +6738,43 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     return { didImportAny, importedAssets }
   }
 
+  const rememberLatestWorkflowPreview = useCallback((job, importedAssets = []) => {
+    const previewAssets = importedAssets.filter((asset) => (
+      asset?.url && ['video', 'image', 'audio'].includes(asset.type)
+    ))
+    const previewAsset = previewAssets[0] || importedAssets[0] || null
+    if (!previewAsset || !job?.workflowId) return
+    setLatestWorkflowPreview({
+      workflowId: job.workflowId,
+      asset: previewAsset,
+      assets: previewAssets.length > 0 ? previewAssets : [previewAsset],
+      index: 0,
+      updatedAt: Date.now(),
+    })
+  }, [])
+
   const runJob = useCallback(async (job) => {
     updateJob(job.id, { status: 'uploading', progress: 5, error: null })
     let importedAssets = []
 
     try {
       let uploadedFilename = null
+      let uploadedVideoFilename = null
       let referenceFilenames = []
+      let assetFieldFilenames = {}
       const outputToken = String(job.id || Date.now()).replace(/[^a-zA-Z0-9_-]/g, '_')
       const originProjectHandle = job?.originProject?.handle || currentProjectHandle
       const findJobAsset = (assetId, snapshotKey) => {
         if (!assetId) return null
-        return assets.find((asset) => asset.id === assetId) || (
-          job?.sourceAssets?.[snapshotKey]?.id === assetId
-            ? job.sourceAssets[snapshotKey]
-            : null
-        )
+        const liveAsset = assets.find((asset) => asset.id === assetId)
+        if (liveAsset) return liveAsset
+        if (snapshotKey && job?.sourceAssets?.[snapshotKey]?.id === assetId) {
+          return job.sourceAssets[snapshotKey]
+        }
+        if (snapshotKey && job?.sourceAssets?.assetFields?.[snapshotKey]?.id === assetId) {
+          return job.sourceAssets.assetFields[snapshotKey]
+        }
+        return null
       }
       const getJobAssetUrl = async (asset) => {
         if (!asset) return null
@@ -6294,19 +6798,31 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         })
       }
       const outputPrefix = (
-        isSingleVideoWorkflowId(job.workflowId)
+        isSingleVideoWorkflowId(job.workflowId) ||
+        job.workflowId === 'ltx23-t2v' ||
+        job.workflowId === 'wan22-t2v' ||
+        job.workflowId === 'seedance2-t2v' ||
+        job.workflowId === 'seedance2-flf2v' ||
+        job.workflowId === 'seedance2-r2v' ||
+        job.workflowId === TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID
           ? `video/director_${outputToken}`
           : (
             job.workflowId === 'image-edit' ||
+            job.workflowId === 'longcat-image-edit' ||
             job.workflowId === 'image-edit-model-product' ||
             job.workflowId === 'seedream-5-lite-image-edit' ||
             job.workflowId === 'z-image-turbo' ||
+            job.workflowId === 'longcat-text-to-image' ||
+            job.workflowId === 'ernie-image-turbo' ||
+            job.workflowId === 'flux2-text-to-image' ||
             job.workflowId === 'nano-banana-2' ||
+            job.workflowId === 'gpt-image-2-t2i' ||
+            job.workflowId === 'gpt-image-2-edit' ||
             job.workflowId === 'grok-text-to-image' ||
             job.workflowId === 'nano-banana-pro'
           )
             ? `image/comfystudio_${outputToken}`
-            : ''
+            : (job.workflowId === 'sonilo-v2m' ? `audio/comfystudio_${outputToken}` : '')
       )
 
       if (job.promptId) {
@@ -6331,6 +6847,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           if (!saveResult?.didImportAny) {
             throw new Error('Generation returned a stale/duplicate output; job was not imported. Queue paused for safety.')
           }
+          rememberLatestWorkflowPreview(job, importedAssets)
           updateJob(job.id, { status: 'done', progress: 100, restoredFromLedger: false })
         } else {
           const msg = 'Generation finished but the output could not be detected'
@@ -6345,7 +6862,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         return
       }
 
-      // Upload image if needed
+      // Upload input media if needed
       if (job.needsImage) {
         let fileToUpload = null
         if (job.inputFromTimelineFrame) {
@@ -6357,7 +6874,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           if (!inputAsset) {
             throw new Error('Input asset not found')
           }
-          if (inputAsset.type === 'video') {
+          if (job.inputAssetType === 'video') {
+            if (inputAsset.type !== 'video') throw new Error('Selected input must be a video')
+            fileToUpload = await createFileFromJobAsset(inputAsset, `input_video_${Date.now()}.mp4`)
+          } else if (inputAsset.type === 'video') {
             const inputUrl = await getJobAssetUrl(inputAsset)
             if (!inputUrl) throw new Error('Input video is not accessible')
             fileToUpload = await extractFrameAsFile(inputUrl, job.frameTime || 0, `frame_${Date.now()}.png`)
@@ -6368,7 +6888,11 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         }
 
         const uploadResult = await comfyui.uploadFile(fileToUpload)
-        uploadedFilename = uploadResult?.name || fileToUpload.name
+        if (job.inputAssetType === 'video') {
+          uploadedVideoFilename = uploadResult?.name || fileToUpload.name
+        } else {
+          uploadedFilename = uploadResult?.name || fileToUpload.name
+        }
       }
 
       // Music-video-shot workflow needs the song audio uploaded once per job.
@@ -6376,18 +6900,39 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       // upload it to Comfy's input folder, and keep the returned filename so
       // the modifier can reference it on the LoadAudio node.
       let uploadedAudioFilename = null
-      if (job.workflowId === MUSIC_VIDEO_SHOT_WORKFLOW_ID && job.musicAudioAssetId) {
-        const audioAsset = findJobAsset(job.musicAudioAssetId, 'audio')
+      const audioUploadAssetId = job.workflowId === MUSIC_VIDEO_SHOT_WORKFLOW_ID
+        ? job.musicAudioAssetId
+        : (job.workflowId === 'ltx23-ia2v' ? job.audioAssetId : null)
+      if (audioUploadAssetId) {
+        const audioAsset = findJobAsset(audioUploadAssetId, 'audio')
         if (!audioAsset) {
-          throw new Error('Audio asset not found — re-select the song/voiceover in Director setup and rebuild the plan.')
+          throw new Error(job.workflowId === MUSIC_VIDEO_SHOT_WORKFLOW_ID
+            ? 'Audio asset not found — re-select the song/voiceover in Director setup and rebuild the plan.'
+            : 'Audio asset not found — re-select conditioning audio and queue again.')
         }
         try {
-          const file = await createFileFromJobAsset(audioAsset, `song_${Date.now()}.mp3`)
+          const file = await createFileFromJobAsset(audioAsset, `audio_${Date.now()}.mp3`)
           if (!file) throw new Error('Audio asset is not accessible')
           const uploadResult = await comfyui.uploadFile(file)
           uploadedAudioFilename = uploadResult?.name || file.name
         } catch (audioError) {
-          throw new Error(`Failed to upload song audio: ${audioError?.message || audioError}`)
+          throw new Error(`Failed to upload audio: ${audioError?.message || audioError}`)
+        }
+      }
+
+      if (job.assetFieldIds && typeof job.assetFieldIds === 'object') {
+        for (const [fieldId, assetId] of Object.entries(job.assetFieldIds)) {
+          const asset = findJobAsset(assetId, fieldId)
+          if (!asset) throw new Error(`Asset not found for ${fieldId}`)
+          try {
+            const fallbackName = `${fieldId}_${Date.now()}${asset.type === 'video' ? '.mp4' : asset.type === 'audio' ? '.mp3' : '.png'}`
+            const file = await createFileFromJobAsset(asset, fallbackName)
+            if (!file) throw new Error('Asset is not accessible')
+            const uploadResult = await comfyui.uploadFile(file)
+            assetFieldFilenames[fieldId] = uploadResult?.name || file.name
+          } catch (assetError) {
+            throw new Error(`Failed to upload ${fieldId}: ${assetError?.message || assetError}`)
+          }
         }
       }
 
@@ -6447,10 +6992,14 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       const {
         modifyWAN22Workflow,
         modifyLTX23I2VWorkflow,
+        modifyLTX23IA2VWorkflow,
         modifyMultipleAnglesWorkflow,
         modifyQwenImageEdit2509Workflow,
         modifyZImageTurboWorkflow,
         modifyNanoBanana2Workflow,
+        modifyOpenAIGPTImage2Workflow,
+        modifySeedance2Workflow,
+        modifySoniloVideoToMusicWorkflow,
         modifyGrokTextToImageWorkflow,
         modifySeedream5LiteImageEditWorkflow,
         modifyGrokVideoI2VWorkflow,
@@ -6458,6 +7007,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         modifyKlingO3I2VWorkflow,
         modifyMusicWorkflow,
         modifyMusicVideoShotWorkflow,
+        modifyLocalApiWorkflow,
+        modifyFrameInterpolationWorkflow,
+        modifyTopazVideoUpscaleWorkflow,
       } = await import('../services/comfyui')
 
       let modifiedWorkflow = null
@@ -6487,6 +7039,34 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             fps: job.fps,
             seed: job.seed,
             filenamePrefix: outputPrefix || 'video/ltx23_i2v',
+          })
+          break
+        case 'ltx23-ia2v':
+          modifiedWorkflow = modifyLTX23IA2VWorkflow(workflowJson, {
+            prompt: job.prompt,
+            negativePrompt: job.negativePrompt,
+            inputImage: uploadedFilename,
+            inputAudio: uploadedAudioFilename,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            duration: job.duration,
+            fps: job.fps,
+            seed: job.seed,
+            filenamePrefix: outputPrefix || 'video/ltx23_ia2v',
+          })
+          break
+        case 'frame-interpolation':
+          modifiedWorkflow = modifyFrameInterpolationWorkflow(workflowJson, {
+            inputVideo: uploadedVideoFilename,
+            interpolationMultiplier: job.interpolationMultiplier || 4,
+            enableFpsMultiplier: job.enableFpsMultiplier,
+            filenamePrefix: outputPrefix || 'video/frame_interpolation',
+          })
+          break
+        case TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID:
+          modifiedWorkflow = modifyTopazVideoUpscaleWorkflow(workflowJson, {
+            inputVideo: uploadedVideoFilename,
+            filenamePrefix: outputPrefix || 'video/topaz_video_upscale',
           })
           break
         case MUSIC_VIDEO_SHOT_WORKFLOW_ID: {
@@ -6554,6 +7134,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             filenamePrefix: outputPrefix || 'video/vidu_q2_i2v',
           })
           break
+        case 'seedance2-t2v':
+        case 'seedance2-flf2v':
+        case 'seedance2-r2v':
+          modifiedWorkflow = modifySeedance2Workflow(workflowJson, {
+            prompt: job.prompt,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            duration: job.duration,
+            seed: job.seed,
+            assetFilenames: assetFieldFilenames,
+            filenamePrefix: outputPrefix || `video/${job.workflowId}`,
+          })
+          break
         case 'multi-angles':
         case 'multi-angles-scene':
           modifiedWorkflow = modifyMultipleAnglesWorkflow(workflowJson, {
@@ -6580,6 +7173,33 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             filenamePrefix: outputPrefix || 'image/z_image_turbo',
           })
           break
+        case 'longcat-text-to-image':
+        case 'ernie-image-turbo':
+        case 'flux2-text-to-image':
+        case 'ltx23-t2v':
+        case 'wan22-t2v':
+          modifiedWorkflow = modifyLocalApiWorkflow(workflowJson, {
+            prompt: job.prompt,
+            negativePrompt: job.negativePrompt,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            duration: job.duration,
+            fps: job.fps,
+            seed: job.seed,
+            filenamePrefix: outputPrefix || `${job.category === 'video' ? 'video' : 'image'}/${job.workflowId}`,
+          })
+          break
+        case 'longcat-image-edit':
+          modifiedWorkflow = modifyLocalApiWorkflow(workflowJson, {
+            prompt: job.prompt,
+            negativePrompt: job.negativePrompt,
+            inputImage: uploadedFilename,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            seed: job.seed,
+            filenamePrefix: 'image/longcat_image_edit',
+          })
+          break
         case 'nano-banana-2':
         case 'nano-banana-pro': // legacy id support
           modifiedWorkflow = modifyNanoBanana2Workflow(workflowJson, {
@@ -6589,6 +7209,25 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             height: job.resolution?.height,
             referenceImages: referenceFilenames,
             filenamePrefix: outputPrefix || 'image/nano_banana_2',
+          })
+          break
+        case 'gpt-image-2-t2i':
+          modifiedWorkflow = modifyOpenAIGPTImage2Workflow(workflowJson, {
+            prompt: job.prompt,
+            seed: job.seed,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            filenamePrefix: outputPrefix || 'image/gpt_image_2',
+          })
+          break
+        case 'gpt-image-2-edit':
+          modifiedWorkflow = modifyOpenAIGPTImage2Workflow(workflowJson, {
+            prompt: job.prompt,
+            inputImage: uploadedFilename,
+            seed: job.seed,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            filenamePrefix: outputPrefix || 'image/gpt_image_2_edit',
           })
           break
         case 'grok-text-to-image':
@@ -6609,6 +7248,14 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             height: job.resolution?.height,
             referenceImages: referenceFilenames,
             filenamePrefix: outputPrefix || 'image/seedream_5_lite',
+          })
+          break
+        case 'sonilo-v2m':
+          modifiedWorkflow = modifySoniloVideoToMusicWorkflow(workflowJson, {
+            prompt: job.prompt,
+            inputVideo: uploadedVideoFilename,
+            seed: job.seed,
+            filenamePrefix: outputPrefix || 'audio/sonilo',
           })
           break
         case 'music-gen':
@@ -6653,6 +7300,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         if (!saveResult?.didImportAny) {
           throw new Error('Generation returned a stale/duplicate output; job was not imported. Queue paused for safety.')
         }
+        rememberLatestWorkflowPreview(job, importedAssets)
         updateJob(job.id, { status: 'done', progress: 100 })
       } else {
         const msg = 'Generation finished but the output could not be detected'
@@ -6674,7 +7322,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     } finally {
       await finalizeStoryboardPdfBatchForJob(job, importedAssets)
     }
-  }, [assets, currentProjectHandle, updateJob, saveGenerationResult, pollForResult, addComfyLog, finalizeStoryboardPdfBatchForJob])
+  }, [assets, currentProjectHandle, updateJob, saveGenerationResult, pollForResult, addComfyLog, finalizeStoryboardPdfBatchForJob, rememberLatestWorkflowPreview])
 
   const processQueue = useCallback(async () => {
     if (processingRef.current) return
@@ -6742,7 +7390,119 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const randomizeSeed = () => setSeed(Math.floor(Math.random() * 1000000000))
 
   // Determine if input column should show
-  const showInputColumn = generationMode === 'single' && currentWorkflow?.needsImage
+  const showInputColumn = generationMode === 'single' && (
+    assetInputSlots.length > 0 ||
+    (selectedWorkflowManifest?.needsImage ?? currentWorkflow?.needsImage)
+  )
+  const inputAssetFilterType = activeAssetSlot?.assetType || selectedWorkflowManifest?.inputAssetType || (showInputColumn ? 'image' : null)
+  const selectedPreviewWorkflowId = selectedWorkflowManifest?.workflowId || workflowId
+  const workflowPreviewAssets = latestWorkflowPreview?.workflowId === selectedPreviewWorkflowId
+    ? (latestWorkflowPreview.assets || (latestWorkflowPreview.asset ? [latestWorkflowPreview.asset] : []))
+    : []
+  const workflowPreviewAssetIndex = latestWorkflowPreview?.workflowId === selectedPreviewWorkflowId
+    ? Math.max(0, Math.min(Number(latestWorkflowPreview.index) || 0, Math.max(0, workflowPreviewAssets.length - 1)))
+    : 0
+  const workflowPreviewAsset = workflowPreviewAssets.length > 0
+    ? workflowPreviewAssets[workflowPreviewAssetIndex]
+    : null
+
+  const workflowDetailValues = {
+    previewAsset: workflowPreviewAsset,
+    previewAssets: workflowPreviewAssets,
+    previewAssetIndex: workflowPreviewAssetIndex,
+    selectedAsset,
+    audioAsset: selectedAudioAsset,
+    ...selectedAssetFields,
+    prompt,
+    musicTags,
+    lyrics,
+    duration,
+    musicDuration,
+    resolution,
+    imageResolution,
+    fps,
+    interpolationMultiplier,
+    enableFpsMultiplier,
+    seed,
+  }
+
+  const workflowDetailActions = {
+    onGenerate: handleGenerate,
+    onPreviewAssetIndexChange: (nextIndex) => {
+      setLatestWorkflowPreview((prev) => {
+        if (!prev || prev.workflowId !== selectedPreviewWorkflowId) return prev
+        const assetsForPreview = prev.assets || (prev.asset ? [prev.asset] : [])
+        if (assetsForPreview.length === 0) return prev
+        const clampedIndex = Math.max(0, Math.min(Number(nextIndex) || 0, assetsForPreview.length - 1))
+        return {
+          ...prev,
+          asset: assetsForPreview[clampedIndex],
+          index: clampedIndex,
+        }
+      })
+    },
+    onSelectAsset: (asset) => {
+      setSelectedAsset(asset)
+      setSelectedAssetId(asset?.id || null)
+    },
+    onSelectAssetField: (fieldId, asset) => {
+      if (fieldId === 'audioAsset') {
+        setSelectedAudioAsset(asset)
+        setSelectedAudioAssetId(asset?.id || null)
+        return
+      }
+      setSelectedAssetFields((prev) => ({ ...prev, [fieldId]: asset || null }))
+      setSelectedAssetFieldIds((prev) => {
+        const next = { ...(prev || {}) }
+        if (asset?.id) {
+          next[fieldId] = asset.id
+        } else {
+          delete next[fieldId]
+        }
+        return next
+      })
+    },
+    randomizeSeed,
+    setValue: (key, value) => {
+      switch (key) {
+        case 'prompt':
+          setPrompt(value)
+          break
+        case 'musicTags':
+          setMusicTags(value)
+          break
+        case 'lyrics':
+          setLyrics(value)
+          break
+        case 'duration':
+          setDuration(value)
+          break
+        case 'musicDuration':
+          setMusicDuration(value)
+          break
+        case 'resolution':
+          setResolution(value)
+          break
+        case 'imageResolution':
+          setImageResolution(value)
+          break
+        case 'fps':
+          setFps(value)
+          break
+        case 'interpolationMultiplier':
+          setInterpolationMultiplier(value)
+          break
+        case 'enableFpsMultiplier':
+          setEnableFpsMultiplier(Boolean(value))
+          break
+        case 'seed':
+          setSeed(value)
+          break
+        default:
+          break
+      }
+    },
+  }
 
   // ============================================
   // Render
@@ -6797,37 +7557,24 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
           <div className="flex items-center gap-1 ml-4 p-1 rounded-lg bg-sf-dark-800 border border-sf-dark-700">
             <button
-              onClick={() => setGenerationMode('single')}
+              onClick={() => {
+                setGenerationMode('single')
+                setWorkflowDetailOpen(false)
+              }}
               className={`px-3 py-1 rounded text-xs transition-colors ${generationMode === 'single' ? 'bg-sf-accent text-white' : 'text-sf-text-muted hover:text-sf-text-primary'}`}
             >
-              Single
+              Generate
             </button>
             <button
-              onClick={() => setGenerationMode('yolo')}
+              onClick={() => {
+                setGenerationMode('yolo')
+                setWorkflowDetailOpen(false)
+              }}
               className={`px-3 py-1 rounded text-xs transition-colors ${generationMode === 'yolo' ? 'bg-sf-accent text-white' : 'text-sf-text-muted hover:text-sf-text-primary'}`}
             >
-              {DIRECTOR_MODE_BETA_LABEL}
+              Create <span className="ml-1 text-[9px] opacity-75">Beta</span>
             </button>
           </div>
-
-          {/* Category tabs */}
-          {generationMode === 'single' && (
-            <div className="flex items-center gap-1 ml-2">
-              {Object.entries(WORKFLOWS).map(([cat, workflows]) => {
-                const Icon = CATEGORY_ICONS[cat]
-                const isActive = category === cat
-                return (
-                  <button key={cat} onClick={() => setCategory(cat)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors ${isActive ? 'bg-sf-accent text-white' : 'bg-sf-dark-800 text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700'}`}
-                  >
-                    <Icon className="w-3.5 h-3.5" />
-                    {cat.charAt(0).toUpperCase() + cat.slice(1)}
-                    <span className="text-[9px] opacity-70">({workflows.length})</span>
-                  </button>
-                )
-              })}
-            </div>
-          )}
         </div>
 
         {/* Connection status */}
@@ -6851,16 +7598,32 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                 setSelectedAsset(asset)
                 setSelectedAssetId(asset?.id || null)
               }}
-              filterType={currentWorkflow?.needsImage ? 'image' : null}
+              filterType={inputAssetFilterType}
               frameTime={frameTime}
               onFrameTimeChange={setFrameTime}
+              assetSlots={assetInputSlots}
+              activeSlotId={activeAssetSlot?.id || 'asset'}
+              onActiveSlotChange={setActiveAssetSlotId}
+              selectedAssetFields={selectedAssetFields}
+              onSelectAssetField={(fieldId, asset) => {
+                setSelectedAssetFields((prev) => ({ ...prev, [fieldId]: asset || null }))
+                setSelectedAssetFieldIds((prev) => {
+                  const next = { ...(prev || {}) }
+                  if (asset?.id) {
+                    next[fieldId] = asset.id
+                  } else {
+                    delete next[fieldId]
+                  }
+                  return next
+                })
+              }}
             />
           </div>
         )}
 
         {/* Center: Settings - extra left padding in yolo mode when sidebar visible to center content with header tabs */}
-        <div className={`flex-1 min-w-0 overflow-auto p-4 ${generationMode === 'yolo' && !rightSidebarCollapsed ? 'pl-40' : ''}`}>
-          <div className={`mx-auto space-y-4 ${generationMode === 'yolo' ? 'max-w-6xl' : 'max-w-2xl'}`}>
+        <div className={`flex-1 min-w-0 overflow-auto px-5 py-4 ${generationMode === 'yolo' && !rightSidebarCollapsed ? 'pl-40' : ''}`}>
+          <div className={`mx-auto w-full space-y-4 ${generationMode === 'yolo' ? 'max-w-6xl' : 'max-w-5xl'}`}>
             {/* Timeline frame from editor (Extend with AI / Starting keyframe for AI) */}
             {frameForAI && generationMode === 'single' && (
               <div className="p-3 rounded-lg border border-sf-accent/40 bg-sf-accent/5">
@@ -6891,6 +7654,29 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             )}
 
             {generationMode === 'single' && (
+              <>
+                {!workflowDetailOpen ? (
+                  <WorkflowBrowser
+                    workflows={visibleWorkflowManifests}
+                    selectedWorkflowId={selectedWorkflowManifest?.id || workflowId}
+                    route={workflowRoute}
+                    onRouteChange={handleWorkflowRouteChange}
+                    onSelectWorkflow={handleWorkflowManifestSelect}
+                  />
+                ) : (
+                  <WorkflowDetail
+                    workflow={selectedWorkflowManifest}
+                    values={workflowDetailValues}
+                    actions={workflowDetailActions}
+                    disabled={isGenerateDisabled}
+                    disabledReason={formError || ''}
+                    onBack={() => setWorkflowDetailOpen(false)}
+                  />
+                )}
+              </>
+            )}
+
+            {generationMode === 'single' && false && (
               <>
                 {/* Workflow selector */}
                 <div>
@@ -7026,7 +7812,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                       className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
                     >
                       <optgroup label="16:9 Landscape">
-                        {workflowId === 'ltx23-i2v' && <option value="3840x2160">3840x2160 (UHD)</option>}
+                        {['ltx23-i2v', 'ltx23-ia2v', 'ltx23-t2v'].includes(workflowId) && <option value="3840x2160">3840x2160 (UHD)</option>}
                         <option value="1920x1080">1920x1080</option>
                         <option value="1280x720">1280x720</option>
                         <option value="960x540">960x540</option>
@@ -7034,7 +7820,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                         <option value="768x512">768x512</option>
                       </optgroup>
                       <optgroup label="9:16 Portrait">
-                        {workflowId === 'ltx23-i2v' && <option value="2160x3840">2160x3840 (Vertical UHD)</option>}
+                        {['ltx23-i2v', 'ltx23-ia2v', 'ltx23-t2v'].includes(workflowId) && <option value="2160x3840">2160x3840 (Vertical UHD)</option>}
                         <option value="1080x1920">1080x1920</option>
                         <option value="720x1280">720x1280</option>
                         <option value="540x960">540x960</option>
@@ -7280,24 +8066,86 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
             {generationMode === 'yolo' && (
               <>
-                <div className="flex items-center gap-1 p-1 rounded-lg bg-sf-dark-800 border border-sf-dark-700">
-                  <button
-                    type="button"
-                    onClick={() => setYoloCreationType('ad')}
-                    className={`flex-1 px-3 py-1.5 rounded text-xs transition-colors ${yoloCreationType === 'ad' ? 'bg-sf-accent text-white' : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700'}`}
-                  >
-                    Ad Creation
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setYoloCreationType('music')}
-                    className={`flex-1 px-3 py-1.5 rounded text-xs transition-colors ${yoloCreationType === 'music' ? 'bg-sf-accent text-white' : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700'}`}
-                  >
-                    Music Video Creation
-                  </button>
-                </div>
+                {!workflowDetailOpen ? (
+                  <WorkflowBrowser
+                    workflows={visibleWorkflowManifests}
+                    selectedWorkflowId={selectedWorkflowManifest?.id || ''}
+                    route={workflowRoute}
+                    onRouteChange={handleWorkflowRouteChange}
+                    onSelectWorkflow={handleWorkflowManifestSelect}
+                  />
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setWorkflowDetailOpen(false)}
+                      className="sticky top-0 z-20 inline-flex items-center gap-2 self-start rounded-lg border border-sf-dark-700 bg-sf-dark-950/90 px-3 py-1.5 text-xs text-sf-text-secondary shadow-sm backdrop-blur transition-colors hover:border-sf-dark-500 hover:text-sf-text-primary"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                      Back to create workflows
+                    </button>
 
-                {(
+                    <div className="flex items-center gap-1 p-1 rounded-lg bg-sf-dark-800 border border-sf-dark-700">
+                      <button
+                        type="button"
+                        onClick={() => setYoloCreationType('ad')}
+                        className={`flex-1 px-3 py-1.5 rounded text-xs transition-colors ${yoloCreationType === 'ad' ? 'bg-sf-accent text-white' : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700'}`}
+                      >
+                        Ad Creation
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setYoloCreationType('music')}
+                        className={`flex-1 px-3 py-1.5 rounded text-xs transition-colors ${yoloCreationType === 'music' ? 'bg-sf-accent text-white' : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700'}`}
+                      >
+                        Music Video Creation
+                      </button>
+                    </div>
+
+                {isAdEasyMode ? (
+                  <AdEasyMode
+                    assets={assets}
+                    yoloActivePlan={yoloActivePlan}
+                    yoloQueueVariants={yoloQueueVariants}
+                    yoloStoryboardAssetMap={yoloStoryboardAssetMap}
+                    yoloStoryboardReadyCount={yoloStoryboardReadyCount}
+                    yoloDefaultVideoWorkflowId={yoloDefaultVideoWorkflowId}
+                    yoloDependencyCheckInProgress={yoloDependencyCheckInProgress}
+                    yoloScript={yoloScript}
+                    setYoloScript={setYoloScript}
+                    setYoloStyleNotes={setYoloStyleNotes}
+                    setYoloAdBrandName={setYoloAdBrandName}
+                    setYoloAdProductName={setYoloAdProductName}
+                    setYoloAdColorPalette={setYoloAdColorPalette}
+                    setYoloAdLogoConstraints={setYoloAdLogoConstraints}
+                    setYoloAdSpokespersonRole={setYoloAdSpokespersonRole}
+                    setYoloAdWardrobeNotes={setYoloAdWardrobeNotes}
+                    setYoloAdProductAssetId={setYoloAdProductAssetId}
+                    setYoloAdModelAssetId={setYoloAdModelAssetId}
+                    setYoloAdFormatPreset={setYoloAdFormatPreset}
+                    setYoloAdPlatformPreset={setYoloAdPlatformPreset}
+                    setYoloAdStoryboardSource={setYoloAdStoryboardSource}
+                    setYoloAdStoryboardTier={setYoloAdStoryboardTier}
+                    setYoloAdVideoSource={setYoloAdVideoSource}
+                    setYoloAdVideoTier={setYoloAdVideoTier}
+                    setYoloAdLocalVideoWorkflowId={setYoloAdLocalVideoWorkflowId}
+                    setYoloTargetDuration={setYoloTargetDuration}
+                    setYoloShotsPerScene={setYoloShotsPerScene}
+                    setYoloAnglesPerShot={setYoloAnglesPerShot}
+                    setYoloTakesPerAngle={setYoloTakesPerAngle}
+                    setYoloVideoFps={setYoloVideoFps}
+                    setResolution={setResolution}
+                    setImageResolution={setImageResolution}
+                    handleBuildActiveYoloPlan={handleBuildActiveYoloPlan}
+                    handleQueueYoloStoryboards={handleQueueYoloStoryboards}
+                    handleQueueYoloShotStoryboard={handleQueueYoloShotStoryboard}
+                    handleQueueYoloVideos={handleQueueYoloVideos}
+                    handleQueueYoloShotVideo={handleQueueYoloShotVideo}
+                    handleYoloShotImageBeatChange={handleYoloShotImageBeatChange}
+                    handleYoloShotVideoBeatChange={handleYoloShotVideoBeatChange}
+                    handleYoloShotTakesChange={handleYoloShotTakesChange}
+                  />
+                ) : (
                   <>
                     <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/40 p-2">
                       <div
@@ -9332,6 +10180,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     )}
                   </>
                 )}
+                  </>
+                )}
               </>
             )}
           </div>
@@ -9374,7 +10224,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
               <Sparkles className="w-4 h-4" />
               {generationMode === 'yolo'
                 ? `Queue ${yoloModeLabel} Keyframes`
-                : `Queue ${category === 'video' ? 'Video' : category === 'image' ? 'Image' : 'Audio'}`}
+                : `Queue ${selectedWorkflowManifest?.outputType === 'audio' || category === 'audio' ? 'Audio' : selectedWorkflowManifest?.outputType === 'image' || category === 'image' ? 'Image' : 'Video'}`}
             </button>
             <div className="mt-2 flex gap-2">
               {generationQueue.some(j => j.status === 'paused') && (

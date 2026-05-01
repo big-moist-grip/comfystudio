@@ -287,6 +287,8 @@ function PreviewPanel() {
     setPreviewProxyInvalid,
     useProxyPlaybackForAssets,
     setUseProxyPlaybackForAssets,
+    glslPreviewQuality,
+    setGlslPreviewQuality,
   } = useTimelineStore()
   
   // Use timeline playback hook
@@ -2073,6 +2075,21 @@ function PreviewPanel() {
                             : 'Proxies: Off'}
                         </button>
                       )}
+                      <label
+                        className="flex items-center gap-1 rounded bg-sf-dark-700 px-2 py-1 text-xs text-sf-text-muted"
+                        title="Controls live GLSL shader preview resolution only. Export still renders at full quality."
+                      >
+                        <span>GLSL</span>
+                        <select
+                          value={glslPreviewQuality}
+                          onChange={(event) => setGlslPreviewQuality(event.target.value)}
+                          className="bg-sf-dark-800 text-sf-text-secondary outline-none"
+                        >
+                          <option value="full">Full</option>
+                          <option value="half">Half</option>
+                          <option value="quarter">Quarter</option>
+                        </select>
+                      </label>
                       {useProxyPlaybackForAssets && currentProjectHandle && window.electronAPI && proxyCoverage.total > 0 && (
                         <button
                           type="button"

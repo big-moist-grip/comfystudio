@@ -19,22 +19,37 @@ export const CATEGORY_ORDER = ['Shot', 'Movement', 'Angle', 'Lighting', 'Mood', 
 export const WORKFLOWS = {
   video: [
     { id: 'ltx23-i2v', label: 'Image to Video (LTX 2.3)', needsImage: true, description: 'Animate an image with local LTX 2.3' },
+    { id: 'ltx23-ia2v', label: 'Image + Audio to Video (LTX 2.3)', needsImage: true, description: 'Animate an image with local LTX 2.3 audio conditioning' },
+    { id: 'ltx23-t2v', label: 'Text to Video (LTX 2.3)', needsImage: false, description: 'Generate video from text with local LTX 2.3' },
     { id: 'wan22-i2v', label: 'Image to Video (WAN 2.2)', needsImage: true, description: 'Animate an image into video' },
+    { id: 'wan22-t2v', label: 'Text to Video (WAN 2.2)', needsImage: false, description: 'Generate video from text with local WAN 2.2' },
+    { id: 'frame-interpolation', label: 'Frame Interpolation', needsImage: true, description: 'Add in-between frames to smooth video motion' },
     { id: 'kling-o3-i2v', label: 'Image to Video (Kling O3 Omni)', needsImage: true, description: 'Premium image-to-video with Kling 3.0 Omni' },
     { id: 'grok-video-i2v', label: 'Image to Video (Grok Imagine Video)', needsImage: true, description: 'Cloud image-to-video with Grok Imagine Video Beta' },
     { id: 'vidu-q2-i2v', label: 'Image to Video (Vidu Q2)', needsImage: true, description: 'Cloud image-to-video with Vidu Q2 Pro Fast' },
+    { id: 'seedance2-t2v', label: 'Text to Video (Seedance 2.0)', needsImage: false, description: 'Cloud text-to-video with ByteDance Seedance 2.0' },
+    { id: 'seedance2-flf2v', label: 'First/Last Frame to Video (Seedance 2.0)', needsImage: false, description: 'Cloud first/last-frame video with ByteDance Seedance 2.0' },
+    { id: 'seedance2-r2v', label: 'Reference to Video (Seedance 2.0)', needsImage: false, description: 'Cloud multi-reference video with ByteDance Seedance 2.0' },
+    { id: TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID, label: 'Topaz Video Enhance', needsImage: false, description: 'Cloud video upscaling and enhancement' },
   ],
   image: [
     { id: 'z-image-turbo', label: 'Text to Image (Z Image Turbo)', needsImage: false, description: 'Generate image from text prompt using Z Image Turbo' },
+    { id: 'longcat-text-to-image', label: 'Text to Image (LongCat)', needsImage: false, description: 'Generate image with local LongCat' },
+    { id: 'ernie-image-turbo', label: 'Text to Image (Ernie Turbo)', needsImage: false, description: 'Generate image with local Ernie Image Turbo' },
+    { id: 'flux2-text-to-image', label: 'Text to Image (Flux 2)', needsImage: false, description: 'Generate image with local Flux 2' },
     { id: 'nano-banana-2', label: 'Text to Image (Nano Banana 2)', needsImage: false, description: 'Premium text-to-image with Nano Banana 2' },
+    { id: 'gpt-image-2-t2i', label: 'Text to Image (GPT Image 2)', needsImage: false, description: 'Cloud text-to-image with OpenAI GPT Image 2' },
+    { id: 'gpt-image-2-edit', label: 'Image Edit (GPT Image 2)', needsImage: true, description: 'Cloud image edit with OpenAI GPT Image 2' },
     { id: 'grok-text-to-image', label: 'Text to Image (Grok Imagine)', needsImage: false, description: 'Cloud text-to-image using Grok Imagine Image Beta' },
     { id: 'seedream-5-lite-image-edit', label: 'Image Edit (Seedream 5.0 Lite)', needsImage: true, description: 'Cloud image edit with ByteDance Seedream 5.0 Lite' },
     { id: 'multi-angles', label: 'Multiple Angles (Characters)', needsImage: true, description: 'Generate 8 camera angles from one character image' },
     { id: 'multi-angles-scene', label: 'Multiple Angles (Scenes)', needsImage: true, description: 'Generate 8 camera angles from one scene image' },
     { id: 'image-edit', label: 'Image Edit', needsImage: true, description: 'Edit image with text prompt (e.g. remove person on left, change color of car)' },
+    { id: 'longcat-image-edit', label: 'LongCat Image Edit', needsImage: true, description: 'Edit image with local LongCat' },
   ],
   audio: [
     { id: 'music-gen', label: 'Music Generation', needsImage: false, description: 'Generate music from tags and lyrics' },
+    { id: 'sonilo-v2m', label: 'Video to Music (Sonilo)', needsImage: true, description: 'Cloud video-to-music generation with Sonilo' },
   ],
 }
 
@@ -96,11 +111,17 @@ export const YOLO_MUSIC_PROFILES = Object.freeze({
 
 export const VIDEO_DURATION_PRESETS = Object.freeze([2, 3, 5, 8])
 export const LTX23_VIDEO_DURATION_PRESETS = Object.freeze([5, 8, 10, 15])
+export const SEEDANCE_VIDEO_DURATION_PRESETS = Object.freeze([5, 7, 10])
 
 export function getVideoDurationPresets(workflowId = '') {
-  return String(workflowId || '').trim() === 'ltx23-i2v'
-    ? LTX23_VIDEO_DURATION_PRESETS
-    : VIDEO_DURATION_PRESETS
+  const normalized = String(workflowId || '').trim()
+  if (['ltx23-i2v', 'ltx23-ia2v', 'ltx23-t2v'].includes(normalized)) {
+    return LTX23_VIDEO_DURATION_PRESETS
+  }
+  if (['seedance2-t2v', 'seedance2-flf2v', 'seedance2-r2v'].includes(normalized)) {
+    return SEEDANCE_VIDEO_DURATION_PRESETS
+  }
+  return VIDEO_DURATION_PRESETS
 }
 
 export const YOLO_QUEUE_CONFIRM_THRESHOLD = 10
@@ -221,10 +242,9 @@ export const GENERATED_ASSET_FOLDERS = Object.freeze({
   audio: ['Generated', 'Audio'],
 })
 
-// Destination folders for the "auto-import anything generated in the
-// embedded ComfyUI tab" feature. Kept separate from GENERATED_ASSET_FOLDERS
-// so users can distinguish outputs from managed workflows vs. free-form
-// custom runs queued via the ComfyUI tab / CLI / external browser.
+// Destination folders for unmanaged custom runs observed through the embedded
+// ComfyUI tab. Kept separate from GENERATED_ASSET_FOLDERS so users can
+// distinguish managed workflow outputs from free-form ComfyUI-tab outputs.
 export const IMPORTED_COMFY_ASSET_FOLDERS = Object.freeze({
   image: ['Imported from ComfyUI', 'Images'],
   video: ['Imported from ComfyUI', 'Videos'],
@@ -251,16 +271,30 @@ export const YOLO_VIDEO_WORKFLOW_TARGET_OPTIONS = Object.freeze([
 
 const WORKFLOW_DISPLAY_LABELS = Object.freeze({
   'wan22-i2v': 'WAN 2.2',
+  'wan22-t2v': 'WAN 2.2 Text to Video',
   'ltx23-i2v': 'LTX 2.3',
+  'ltx23-ia2v': 'LTX 2.3 IA2V',
+  'ltx23-t2v': 'LTX 2.3 Text to Video',
+  'frame-interpolation': 'Frame Interpolation',
   'kling-o3-i2v': 'Kling O3 Omni',
   'grok-video-i2v': 'Grok Imagine Video',
   'vidu-q2-i2v': 'Vidu Q2',
+  'seedance2-t2v': 'Seedance 2.0 Text to Video',
+  'seedance2-flf2v': 'Seedance 2.0 First/Last Frame',
+  'seedance2-r2v': 'Seedance 2.0 Reference to Video',
   [TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID]: 'Topaz Video Upscale',
   [MUSIC_VIDEO_SHOT_WORKFLOW_ID]: 'Music Video Shot (LTX 2.3 + Audio)',
   [VOCAL_EXTRACT_WORKFLOW_ID]: 'Vocal Extract (Mel-Band)',
   'caption-qwen-asr': 'Caption Transcription (Qwen ASR)',
   'grok-text-to-image': 'Grok Imagine',
+  'gpt-image-2-t2i': 'GPT Image 2',
+  'gpt-image-2-edit': 'GPT Image 2 Edit',
+  'longcat-text-to-image': 'LongCat Text to Image',
+  'ernie-image-turbo': 'Ernie Image Turbo',
+  'flux2-text-to-image': 'Flux 2 Text to Image',
+  'longcat-image-edit': 'LongCat Image Edit',
   'google-gemini-flash-lite': 'Prompt Helper (Gemini 3.1 Flash Lite)',
+  'sonilo-v2m': 'Sonilo Video to Music',
   'seedream-5-lite-image-edit': 'Seedream 5.0 Lite',
   'image-edit-model-product': 'Qwen Image Edit 2509 (Model + Product)',
   'mask-gen': 'Mask Generation',
@@ -302,6 +336,30 @@ const WORKFLOW_HARDWARE = Object.freeze({
     minimumVramGb: 8,
     recommendedVramGb: 10,
   },
+  'longcat-text-to-image': {
+    tierId: 'standard',
+    runtime: 'local',
+    minimumVramGb: 12,
+    recommendedVramGb: 16,
+  },
+  'ernie-image-turbo': {
+    tierId: 'standard',
+    runtime: 'local',
+    minimumVramGb: 12,
+    recommendedVramGb: 16,
+  },
+  'flux2-text-to-image': {
+    tierId: 'pro',
+    runtime: 'local',
+    minimumVramGb: 16,
+    recommendedVramGb: 24,
+  },
+  'frame-interpolation': {
+    tierId: 'standard',
+    runtime: 'local',
+    minimumVramGb: 6,
+    recommendedVramGb: 8,
+  },
   'music-gen': {
     tierId: 'lite',
     runtime: 'local',
@@ -309,6 +367,12 @@ const WORKFLOW_HARDWARE = Object.freeze({
     recommendedVramGb: 8,
   },
   'image-edit': {
+    tierId: 'standard',
+    runtime: 'local',
+    minimumVramGb: 12,
+    recommendedVramGb: 16,
+  },
+  'longcat-image-edit': {
     tierId: 'standard',
     runtime: 'local',
     minimumVramGb: 12,
@@ -338,13 +402,39 @@ const WORKFLOW_HARDWARE = Object.freeze({
     minimumVramGb: 20,
     recommendedVramGb: 24,
   },
+  'wan22-t2v': {
+    tierId: 'pro',
+    runtime: 'local',
+    minimumVramGb: 20,
+    recommendedVramGb: 24,
+  },
   'ltx23-i2v': {
     tierId: 'pro',
     runtime: 'local',
     minimumVramGb: 24,
     recommendedVramGb: 32,
   },
+  'ltx23-t2v': {
+    tierId: 'pro',
+    runtime: 'local',
+    minimumVramGb: 24,
+    recommendedVramGb: 32,
+  },
+  'ltx23-ia2v': {
+    tierId: 'pro',
+    runtime: 'local',
+    minimumVramGb: 24,
+    recommendedVramGb: 32,
+  },
   'nano-banana-2': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  'gpt-image-2-t2i': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  'gpt-image-2-edit': {
     tierId: 'cloud',
     runtime: 'cloud',
   },
@@ -361,6 +451,18 @@ const WORKFLOW_HARDWARE = Object.freeze({
     runtime: 'cloud',
   },
   'vidu-q2-i2v': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  'seedance2-t2v': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  'seedance2-flf2v': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  'seedance2-r2v': {
     tierId: 'cloud',
     runtime: 'cloud',
   },
@@ -385,6 +487,10 @@ const WORKFLOW_HARDWARE = Object.freeze({
     runtime: 'cloud',
   },
   'google-gemini-flash-lite': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  'sonilo-v2m': {
     tierId: 'cloud',
     runtime: 'cloud',
   },

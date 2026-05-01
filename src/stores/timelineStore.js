@@ -441,6 +441,7 @@ export const useTimelineStore = create(
   // asset.proxyUrl over asset.playbackCacheUrl/url for preview only. Export
   // always uses asset.path. Hydrated from localStorage on boot in PreviewPanel.
   useProxyPlaybackForAssets: (typeof localStorage !== 'undefined' && localStorage.getItem('comfystudio-use-playback-proxies') === 'true'),
+  glslPreviewQuality: (typeof localStorage !== 'undefined' && localStorage.getItem('comfystudio-glsl-preview-quality')) || 'full',
   
   // Snapping settings
   snappingEnabled: true,
@@ -3039,6 +3040,13 @@ export const useTimelineStore = create(
     set({ useProxyPlaybackForAssets: Boolean(enabled) })
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem('comfystudio-use-playback-proxies', enabled ? 'true' : 'false')
+    }
+  },
+  setGlslPreviewQuality: (quality) => {
+    const normalized = ['full', 'half', 'quarter'].includes(quality) ? quality : 'full'
+    set({ glslPreviewQuality: normalized })
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('comfystudio-glsl-preview-quality', normalized)
     }
   },
   setPreviewProxyInvalid: () => {

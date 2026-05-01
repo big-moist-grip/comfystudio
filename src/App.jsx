@@ -41,6 +41,7 @@ function App() {
   const [hasMountedFlowAi, setHasMountedFlowAi] = useState(false)
   const [bottomEditorView, setBottomEditorView] = useState('timeline')
   const [activeTimelineToolLabel, setActiveTimelineToolLabel] = useState('Move tool')
+  const mainTabRef = useRef(mainTab)
   
   // Left panel state
   const [leftPanelExpanded, setLeftPanelExpanded] = useState(true)
@@ -115,11 +116,16 @@ function App() {
     return () => { try { stop?.() } catch (_) { /* ignore */ } }
   }, [])
 
-  // Auto-import outputs from any prompt run against the connected
-  // ComfyUI instance (including custom workflows run from the embedded
-  // ComfyUI tab) into the current project's asset panel.
   useEffect(() => {
-    const stop = startComfyAutoImport()
+    mainTabRef.current = mainTab
+  }, [mainTab])
+
+  // Auto-import outputs from custom workflows run while the embedded
+  // ComfyUI tab is active. Managed Generate jobs use their own import path.
+  useEffect(() => {
+    const stop = startComfyAutoImport({
+      shouldImportUnmanagedPrompt: () => mainTabRef.current === 'comfyui',
+    })
     return () => { try { stop?.() } catch (_) { /* ignore */ } }
   }, [])
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 const STEPS = [
   { id: 'brief', label: 'Brief' },
@@ -8,7 +8,7 @@ const STEPS = [
   { id: 'script', label: 'Script Plan' },
   { id: 'keyframes', label: 'Keyframes' },
   { id: 'videos', label: 'Videos' },
-  { id: 'done', label: 'Queued' },
+  { id: 'done', label: 'Complete' },
 ]
 
 const FORMAT_OPTIONS = [
@@ -48,6 +48,74 @@ const RESOLUTION_OPTIONS = [
   { id: '1080p', label: '1080p' },
 ]
 const FPS_OPTIONS = [24, 25, 30]
+const KEYFRAME_BUSY_STATUSES = new Set(['queued', 'paused', 'uploading', 'configuring', 'queuing', 'running', 'saving'])
+const VIDEO_BUSY_STATUSES = KEYFRAME_BUSY_STATUSES
+const AD_EASY_MODE_DRAFT_STORAGE_KEY = 'comfystudio-ad-easy-mode-draft-v1'
+const DEFAULT_AD_EASY_MODE_DRAFT = Object.freeze({
+  brand: 'Gold Bond',
+  product: 'Dry Skin Relief Lotion',
+  colors: 'Natural neutral colors, warm bathroom light',
+  audience: 'People with dry winter skin who want fast relief',
+  promise: 'Soft, healthy-looking skin without a greasy finish.',
+  talentDirection: '',
+  format: 'beauty_spot',
+  platform: 'vertical_9x16',
+  tone: 'premium-calm',
+  resolutionPreset: '720p',
+  videoFps: 24,
+  commercialLength: 30,
+  shotCount: 8,
+  videoWorkflowId: 'ltx23-i2v',
+  productAssetId: '',
+  talentAssetId: '',
+  noVisibleTalent: false,
+  directorScript: '',
+})
+
+function normalizeDraftOption(value, options, fallback) {
+  const normalized = String(value || '').trim()
+  return options.some((option) => option?.id === normalized) ? normalized : fallback
+}
+
+function normalizeDraftNumber(value, allowedValues, fallback) {
+  const parsed = Number(value)
+  return allowedValues.includes(parsed) ? parsed : fallback
+}
+
+function normalizeAdEasyModeDraft(rawDraft = {}) {
+  const raw = rawDraft && typeof rawDraft === 'object' ? rawDraft : {}
+  return {
+    brand: String(raw.brand || DEFAULT_AD_EASY_MODE_DRAFT.brand),
+    product: String(raw.product || DEFAULT_AD_EASY_MODE_DRAFT.product),
+    colors: String(raw.colors || DEFAULT_AD_EASY_MODE_DRAFT.colors),
+    audience: String(raw.audience || DEFAULT_AD_EASY_MODE_DRAFT.audience),
+    promise: String(raw.promise || DEFAULT_AD_EASY_MODE_DRAFT.promise),
+    talentDirection: String(raw.talentDirection || ''),
+    format: normalizeDraftOption(raw.format, FORMAT_OPTIONS, DEFAULT_AD_EASY_MODE_DRAFT.format),
+    platform: normalizeDraftOption(raw.platform, PLATFORM_OPTIONS, DEFAULT_AD_EASY_MODE_DRAFT.platform),
+    tone: normalizeDraftOption(raw.tone, TONE_OPTIONS, DEFAULT_AD_EASY_MODE_DRAFT.tone),
+    resolutionPreset: normalizeDraftOption(raw.resolutionPreset, RESOLUTION_OPTIONS, DEFAULT_AD_EASY_MODE_DRAFT.resolutionPreset),
+    videoFps: normalizeDraftNumber(raw.videoFps, FPS_OPTIONS, DEFAULT_AD_EASY_MODE_DRAFT.videoFps),
+    commercialLength: normalizeDraftNumber(raw.commercialLength, COMMERCIAL_LENGTH_OPTIONS, DEFAULT_AD_EASY_MODE_DRAFT.commercialLength),
+    shotCount: normalizeDraftNumber(raw.shotCount, SHOT_COUNT_OPTIONS, DEFAULT_AD_EASY_MODE_DRAFT.shotCount),
+    videoWorkflowId: normalizeDraftOption(raw.videoWorkflowId, VIDEO_MODEL_OPTIONS, DEFAULT_AD_EASY_MODE_DRAFT.videoWorkflowId),
+    productAssetId: String(raw.productAssetId || ''),
+    talentAssetId: String(raw.talentAssetId || ''),
+    noVisibleTalent: Boolean(raw.noVisibleTalent),
+    directorScript: String(raw.directorScript || ''),
+  }
+}
+
+function loadAdEasyModeDraft() {
+  if (typeof localStorage === 'undefined') return DEFAULT_AD_EASY_MODE_DRAFT
+  try {
+    const raw = localStorage.getItem(AD_EASY_MODE_DRAFT_STORAGE_KEY)
+    if (!raw) return DEFAULT_AD_EASY_MODE_DRAFT
+    return normalizeAdEasyModeDraft(JSON.parse(raw))
+  } catch (_) {
+    return DEFAULT_AD_EASY_MODE_DRAFT
+  }
+}
 
 function getSuggestedShotCount(length) {
   const seconds = Number(length) || 30
@@ -94,6 +162,12 @@ function formatResolutionLabel(resolution) {
 
 function getAssetUrl(asset) {
   return asset?.url || asset?.thumbnailUrl || asset?.proxyUrl || asset?.path || ''
+}
+
+function getVideoVariantWorkflowKey(variantKey, workflowId) {
+  const key = String(variantKey || '').trim()
+  const workflow = String(workflowId || '').trim()
+  return key && workflow ? `${key}::${workflow}` : ''
 }
 
 function compact(text, fallback) {
@@ -419,11 +493,11 @@ function flattenPlanShots(plan) {
 
 export default function AdEasyMode({
   assets,
+  generationQueue,
   yoloActivePlan,
   yoloQueueVariants,
   yoloStoryboardAssetMap,
   yoloStoryboardReadyCount,
-  yoloDefaultVideoWorkflowId,
   yoloDependencyCheckInProgress,
   yoloScript,
   setYoloScript,
@@ -459,30 +533,82 @@ export default function AdEasyMode({
   handleYoloShotVideoBeatChange,
   handleYoloShotTakesChange,
 }) {
+  const initialDraft = useMemo(() => loadAdEasyModeDraft(), [])
   const [step, setStep] = useState('brief')
-  const [brand, setBrand] = useState('Gold Bond')
-  const [product, setProduct] = useState('Dry Skin Relief Lotion')
-  const [colors, setColors] = useState('Natural neutral colors, warm bathroom light')
-  const [audience, setAudience] = useState('People with dry winter skin who want fast relief')
-  const [promise, setPromise] = useState('Soft, healthy-looking skin without a greasy finish.')
-  const [talentDirection, setTalentDirection] = useState('')
-  const [format, setFormat] = useState('beauty_spot')
-  const [platform, setPlatform] = useState('vertical_9x16')
-  const [tone, setTone] = useState('premium-calm')
-  const [resolutionPreset, setResolutionPreset] = useState('720p')
-  const [videoFps, setVideoFps] = useState(24)
-  const [commercialLength, setCommercialLength] = useState(30)
-  const [shotCount, setShotCount] = useState(8)
-  const [videoWorkflowId, setVideoWorkflowId] = useState('ltx23-i2v')
-  const [productAssetId, setProductAssetId] = useState('')
-  const [talentAssetId, setTalentAssetId] = useState('')
-  const [noVisibleTalent, setNoVisibleTalent] = useState(false)
-  const [directorScript, setDirectorScript] = useState(yoloScript || '')
+  const [brand, setBrand] = useState(initialDraft.brand)
+  const [product, setProduct] = useState(initialDraft.product)
+  const [colors, setColors] = useState(initialDraft.colors)
+  const [audience, setAudience] = useState(initialDraft.audience)
+  const [promise, setPromise] = useState(initialDraft.promise)
+  const [talentDirection, setTalentDirection] = useState(initialDraft.talentDirection)
+  const [format, setFormat] = useState(initialDraft.format)
+  const [platform, setPlatform] = useState(initialDraft.platform)
+  const [tone, setTone] = useState(initialDraft.tone)
+  const [resolutionPreset, setResolutionPreset] = useState(initialDraft.resolutionPreset)
+  const [videoFps, setVideoFps] = useState(initialDraft.videoFps)
+  const [commercialLength, setCommercialLength] = useState(initialDraft.commercialLength)
+  const [shotCount, setShotCount] = useState(initialDraft.shotCount)
+  const [videoWorkflowId, setVideoWorkflowId] = useState(initialDraft.videoWorkflowId)
+  const [productAssetId, setProductAssetId] = useState(initialDraft.productAssetId)
+  const [talentAssetId, setTalentAssetId] = useState(initialDraft.talentAssetId)
+  const [noVisibleTalent, setNoVisibleTalent] = useState(initialDraft.noVisibleTalent)
+  const [directorScript, setDirectorScript] = useState(initialDraft.directorScript || yoloScript || '')
   const [selectedShotIndex, setSelectedShotIndex] = useState(0)
   const [selectedVideoIndex, setSelectedVideoIndex] = useState(0)
   const [keyframeStatus, setKeyframeStatus] = useState('Ready to generate one keyframe.')
   const [videoStatus, setVideoStatus] = useState('Ready to generate one video.')
   const [llmCopyStatus, setLlmCopyStatus] = useState('')
+  const [isQueuingKeyframes, setIsQueuingKeyframes] = useState(false)
+  const [isQueuingVideos, setIsQueuingVideos] = useState(false)
+
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return
+    const draft = {
+      brand,
+      product,
+      colors,
+      audience,
+      promise,
+      talentDirection,
+      format,
+      platform,
+      tone,
+      resolutionPreset,
+      videoFps,
+      commercialLength,
+      shotCount,
+      videoWorkflowId,
+      productAssetId,
+      talentAssetId,
+      noVisibleTalent,
+      directorScript,
+      updatedAt: new Date().toISOString(),
+    }
+    try {
+      localStorage.setItem(AD_EASY_MODE_DRAFT_STORAGE_KEY, JSON.stringify(draft))
+    } catch (_) {
+      // Ignore storage failures so the form still works in private or restricted contexts.
+    }
+  }, [
+    audience,
+    brand,
+    colors,
+    commercialLength,
+    directorScript,
+    format,
+    noVisibleTalent,
+    platform,
+    product,
+    productAssetId,
+    promise,
+    resolutionPreset,
+    shotCount,
+    talentAssetId,
+    talentDirection,
+    tone,
+    videoFps,
+    videoWorkflowId,
+  ])
 
   const imageAssets = useMemo(() => (assets || []).filter((asset) => asset?.type === 'image'), [assets])
   const videoAssetMap = useMemo(() => {
@@ -490,12 +616,35 @@ export default function AdEasyMode({
     for (const asset of assets || []) {
       if (asset?.type !== 'video' || asset?.yolo?.stage !== 'video') continue
       if (asset?.yolo?.mode === 'music') continue
-      if (asset?.yolo?.variantKey) map.set(asset.yolo.variantKey, asset)
+      const workflowScopedKey = getVideoVariantWorkflowKey(asset?.yolo?.variantKey, asset?.yolo?.workflowId)
+      if (workflowScopedKey) map.set(workflowScopedKey, asset)
       if (asset?.yolo?.key) map.set(asset.yolo.key, asset)
+      if (asset?.yolo?.variantKey && !asset?.yolo?.workflowId) map.set(asset.yolo.variantKey, asset)
     }
     return map
   }, [assets])
   const planShots = useMemo(() => flattenPlanShots(yoloActivePlan), [yoloActivePlan])
+  const storyboardJobMap = useMemo(() => {
+    const map = new Map()
+    for (const job of generationQueue || []) {
+      if (job?.yolo?.mode === 'music') continue
+      if (job?.yolo?.stage !== 'storyboard' || !job?.yolo?.key) continue
+      map.set(job.yolo.key, job)
+    }
+    return map
+  }, [generationQueue])
+  const videoJobMap = useMemo(() => {
+    const map = new Map()
+    for (const job of generationQueue || []) {
+      if (job?.yolo?.mode === 'music') continue
+      if (job?.yolo?.stage !== 'video') continue
+      const workflowScopedKey = getVideoVariantWorkflowKey(job?.yolo?.variantKey, job?.yolo?.workflowId)
+      if (workflowScopedKey) map.set(workflowScopedKey, job)
+      if (job?.yolo?.key) map.set(job.yolo.key, job)
+      if (job?.yolo?.variantKey && !job?.yolo?.workflowId) map.set(job.yolo.variantKey, job)
+    }
+    return map
+  }, [generationQueue])
 
   const selectedTone = TONE_OPTIONS.find((option) => option.id === tone) || TONE_OPTIONS[0]
   const selectedFormat = FORMAT_OPTIONS.find((option) => option.id === format) || FORMAT_OPTIONS[0]
@@ -548,6 +697,16 @@ export default function AdEasyMode({
     [currentData, directorScript, generatedScript]
   )
 
+  const buildEasyModeStyleNotes = () => ([
+    selectedFormat.label,
+    selectedTone.text,
+    colors,
+    `Output resolution: ${outputResolutionLabel}`,
+    `FPS: ${Number(videoFps) || 24}`,
+    productAssetId ? 'Use the product reference as the packaging/product anchor.' : '',
+    talentAssetId && !noVisibleTalent ? 'Use the talent reference as the identity/wardrobe anchor.' : '',
+  ].filter(Boolean).join('. '))
+
   const applyToDirector = (scriptOverride = directorScript || generatedScript) => {
     const script = scriptOverride || generatedScript
     setYoloAdBrandName(brand)
@@ -572,16 +731,15 @@ export default function AdEasyMode({
     setYoloVideoFps(Number(videoFps) || 24)
     setResolution(outputResolution)
     setImageResolution(outputResolution)
-    setYoloStyleNotes([
-      selectedFormat.label,
-      selectedTone.text,
-      colors,
-      `Output resolution: ${outputResolutionLabel}`,
-      `FPS: ${Number(videoFps) || 24}`,
-      productAssetId ? 'Use the product reference as the packaging/product anchor.' : '',
-      talentAssetId && !noVisibleTalent ? 'Use the talent reference as the identity/wardrobe anchor.' : '',
-    ].filter(Boolean).join('. '))
+    setYoloStyleNotes(buildEasyModeStyleNotes())
     setYoloScript(script)
+  }
+
+  const handleVideoWorkflowChange = (workflowId) => {
+    setVideoWorkflowId(workflowId)
+    setYoloAdVideoSource('local')
+    setYoloAdVideoTier('quality')
+    setYoloAdLocalVideoWorkflowId(workflowId)
   }
 
   const goTo = (nextStep) => {
@@ -602,13 +760,124 @@ export default function AdEasyMode({
     }
   }
 
-  const handleBuildPlan = () => {
-    applyToDirector(directorScript)
-    const plan = handleBuildActiveYoloPlan()
+  const buildPlanOptions = (script, styleNotes) => ({
+    scriptOverride: script,
+    styleNotesOverride: styleNotes,
+    targetDurationOverride: Number(commercialLength) || 30,
+    shotsPerSceneOverride: Number(shotCount) || 8,
+    anglesPerShotOverride: 1,
+    takesPerAngleOverride: 1,
+    productAssetIdOverride: productAssetId || '',
+    modelAssetIdOverride: noVisibleTalent ? '' : (talentAssetId || ''),
+    productNameOverride: product,
+    brandNameOverride: brand,
+    colorPaletteOverride: colors,
+    logoConstraintsOverride: promise,
+    spokespersonRoleOverride: noVisibleTalent ? 'No visible talent' : talentDirection,
+    wardrobeNotesOverride: noVisibleTalent ? '' : talentDirection,
+    formatPresetOverride: format,
+    platformPresetOverride: platform,
+  })
+
+  const handleUpdatePlanOnly = () => {
+    const script = directorScript || generatedScript
+    const styleNotes = buildEasyModeStyleNotes()
+    applyToDirector(script)
+    const plan = handleBuildActiveYoloPlan(buildPlanOptions(script, styleNotes))
     if (Array.isArray(plan) && plan.length > 0) {
       setSelectedShotIndex(0)
       setSelectedVideoIndex(0)
-      setStep('keyframes')
+      setKeyframeStatus('Plan updated without queueing keyframes.')
+      setVideoStatus('Plan updated. You can create videos from the existing keyframes.')
+      if (yoloStoryboardReadyCount > 0) {
+        setStep('keyframes')
+      }
+    } else {
+      setKeyframeStatus('Could not update the plan. Check the script format and try again.')
+    }
+  }
+
+  const handleBuildPlan = async () => {
+    const script = directorScript || generatedScript
+    const styleNotes = buildEasyModeStyleNotes()
+    applyToDirector(script)
+    setIsQueuingKeyframes(true)
+    setKeyframeStatus('Building the plan and queueing keyframes...')
+    try {
+      const plan = handleBuildActiveYoloPlan(buildPlanOptions(script, styleNotes))
+      if (Array.isArray(plan) && plan.length > 0) {
+        setSelectedShotIndex(0)
+        setSelectedVideoIndex(0)
+        setStep('keyframes')
+        const queuedCount = await handleQueueYoloStoryboards({
+          planOverride: plan,
+          skipStaleCheck: true,
+          skipConfirm: true,
+          sourceLabel: 'Ad Easy Mode keyframe pass',
+          productAssetIdOverride: productAssetId || '',
+          modelAssetIdOverride: noVisibleTalent ? '' : (talentAssetId || ''),
+          resolutionOverride: outputResolution,
+        })
+        setKeyframeStatus(
+          queuedCount > 0
+            ? `Queued ${queuedCount} keyframe job${queuedCount === 1 ? '' : 's'}. They will appear here as each shot finishes.`
+            : 'No new keyframe jobs were queued. Check the queue or existing keyframes.'
+        )
+      } else {
+        setKeyframeStatus('Could not build the plan. Check the script format and try again.')
+      }
+    } finally {
+      setIsQueuingKeyframes(false)
+    }
+  }
+
+  const handleRegenerateAllKeyframes = async () => {
+    if (planShots.length === 0) return
+    setIsQueuingKeyframes(true)
+    setKeyframeStatus('Queueing regeneration for all keyframes...')
+    try {
+      const queuedCount = await handleQueueYoloStoryboards({
+        planOverride: yoloActivePlan,
+        skipStaleCheck: true,
+        skipConfirm: true,
+        allowExistingDoneKeys: true,
+        sourceLabel: 'Ad Easy Mode keyframe regeneration pass',
+        productAssetIdOverride: productAssetId || '',
+        modelAssetIdOverride: noVisibleTalent ? '' : (talentAssetId || ''),
+        resolutionOverride: outputResolution,
+      })
+      setKeyframeStatus(
+        queuedCount > 0
+          ? `Queued ${queuedCount} keyframe regeneration job${queuedCount === 1 ? '' : 's'}.`
+          : 'No keyframe regeneration jobs were queued. Check whether those shots are already running.'
+      )
+    } finally {
+      setIsQueuingKeyframes(false)
+    }
+  }
+
+  const handleRegenerateAllVideos = async () => {
+    if (planShots.length === 0) return
+    setIsQueuingVideos(true)
+    setVideoStatus(`Queueing ${selectedVideoWorkflow.label} for all shot videos...`)
+    setStep('videos')
+    try {
+      const queuedCount = await handleQueueYoloVideos({
+        planOverride: yoloActivePlan,
+        skipStaleCheck: true,
+        skipConfirm: true,
+        allowExistingDoneKeys: true,
+        targetWorkflowIds: [videoWorkflowId],
+        sourceLabel: `Ad Easy Mode ${selectedVideoWorkflow.label} video regeneration pass`,
+        resolutionOverride: outputResolution,
+      })
+      setVideoStatus(
+        queuedCount > 0
+          ? `Queued ${queuedCount} ${selectedVideoWorkflow.label} video job${queuedCount === 1 ? '' : 's'}.`
+          : 'No video jobs were queued. Check for running shots or missing keyframes.'
+      )
+    } finally {
+      setIsQueuingVideos(false)
     }
   }
 
@@ -639,6 +908,63 @@ export default function AdEasyMode({
   const getFirstVariantForShot = (sceneId, shotId) => (
     (yoloQueueVariants || []).find((variant) => variant.sceneId === sceneId && variant.shotId === shotId) || null
   )
+
+  const getVideoAssetForVariant = (variant, workflowId = videoWorkflowId) => {
+    if (!variant?.key) return null
+    const workflowScopedKey = getVideoVariantWorkflowKey(variant.key, workflowId)
+    return (workflowScopedKey ? videoAssetMap.get(workflowScopedKey) : null) || videoAssetMap.get(variant.key) || null
+  }
+
+  const getVideoJobForVariant = (variant, workflowId = videoWorkflowId) => {
+    if (!variant?.key) return null
+    const workflowScopedKey = getVideoVariantWorkflowKey(variant.key, workflowId)
+    return (workflowScopedKey ? videoJobMap.get(workflowScopedKey) : null) || videoJobMap.get(variant.key) || null
+  }
+
+  const getKeyframeCardState = (variant, asset) => {
+    if (asset) return { state: 'ready', label: 'Keyframe ready', job: null }
+    const job = variant ? storyboardJobMap.get(variant.key) : null
+    if (job?.status === 'error') return { state: 'error', label: 'Keyframe failed', job }
+    if (job && KEYFRAME_BUSY_STATUSES.has(job.status)) {
+      const label = job.status === 'queued'
+        ? 'Queued'
+        : job.status === 'saving'
+          ? 'Saving keyframe'
+          : 'Generating keyframe'
+      return { state: 'generating', label, job }
+    }
+    return { state: 'pending', label: 'Keyframe pending', job }
+  }
+
+  const getVideoCardState = (variant, asset, hasKeyframe) => {
+    if (asset) return { state: 'ready', label: 'Video ready', job: null }
+    const job = getVideoJobForVariant(variant)
+    if (job?.status === 'error') return { state: 'error', label: 'Video failed', job }
+    if (job && VIDEO_BUSY_STATUSES.has(job.status)) {
+      const label = job.status === 'queued'
+        ? 'Queued'
+        : job.status === 'saving'
+          ? 'Saving video'
+          : 'Generating video'
+      return { state: 'generating', label, job }
+    }
+    if (!hasKeyframe) return { state: 'blocked', label: 'Needs keyframe', job: null }
+    return { state: 'pending', label: 'Ready to queue', job }
+  }
+
+  const keyframeGeneratingCount = planShots.reduce((count, { scene, shot }) => {
+    const variant = getFirstVariantForShot(scene.id, shot.id)
+    const asset = variant ? yoloStoryboardAssetMap?.get(variant.key) : null
+    const cardState = getKeyframeCardState(variant, asset)
+    return count + (cardState.state === 'generating' ? 1 : 0)
+  }, 0)
+  const videoGeneratingCount = planShots.reduce((count, { scene, shot }) => {
+    const variant = getFirstVariantForShot(scene.id, shot.id)
+    const asset = getVideoAssetForVariant(variant)
+    const hasKeyframe = variant ? yoloStoryboardAssetMap?.has(variant.key) : false
+    const cardState = getVideoCardState(variant, asset, hasKeyframe)
+    return count + (cardState.state === 'generating' ? 1 : 0)
+  }, 0)
 
   const stepIndex = STEPS.findIndex((item) => item.id === step)
 
@@ -826,12 +1152,6 @@ export default function AdEasyMode({
                 {TONE_OPTIONS.map((option) => renderChoiceButton(tone === option.id, option.label, () => setTone(option.id)))}
               </div>
             </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">Video model</div>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {VIDEO_MODEL_OPTIONS.map((option) => renderChoiceButton(videoWorkflowId === option.id, option.label, () => setVideoWorkflowId(option.id), option.helper))}
-              </div>
-            </div>
             <label className="text-xs text-sf-text-secondary md:col-span-2">
               <span className="text-[10px] uppercase tracking-wider text-sf-text-muted">Optional talent or voice direction</span>
               <textarea value={talentDirection} onChange={(e) => setTalentDirection(e.target.value)} rows={3} placeholder="Example: friendly skincare expert, calm female voiceover, no visible spokesperson" className="mt-1 w-full resize-y rounded-lg border border-sf-dark-600 bg-sf-dark-800 px-3 py-2 text-xs text-sf-text-primary focus:border-sf-accent focus:outline-none" />
@@ -892,7 +1212,7 @@ export default function AdEasyMode({
               ['Aspect', platform === 'landscape_16x9' ? '16:9' : platform === 'square_1x1' ? '1:1' : '9:16'],
               ['Resolution', `${resolutionPreset} (${outputResolutionLabel})`],
               ['FPS', `${videoFps} fps`],
-              ['Video', selectedVideoWorkflow.label],
+              ['Video model', 'Choose after keyframes'],
               ['Keyframes', 'Nano Banana 2'],
               ['Product reference', productAssetId ? 'Selected' : 'Optional'],
               ['Talent reference', noVisibleTalent ? 'No visible talent' : (talentAssetId ? 'Selected' : 'Optional')],
@@ -930,7 +1250,7 @@ export default function AdEasyMode({
             </label>
             <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 px-3 py-2">
               <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">Model route</div>
-              <div className="mt-1 text-xs text-sf-text-primary">Nano Banana 2 keyframes + {selectedVideoWorkflow.label} video</div>
+              <div className="mt-1 text-xs text-sf-text-primary">Nano Banana 2 keyframes + video model chosen in Step 7</div>
             </div>
           </div>
           <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-800/40 p-3">
@@ -977,9 +1297,12 @@ export default function AdEasyMode({
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <button type="button" onClick={() => setStep('review')} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary">Back</button>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <button type="button" onClick={() => { const next = generatedScript; setDirectorScript(next); applyToDirector(next) }} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary">Regenerate script from brief</button>
-              <button type="button" onClick={handleBuildPlan} className="rounded-lg bg-sf-accent px-3 py-2 text-xs text-white hover:bg-sf-accent-hover">Looks Good - Create Keyframes</button>
+              <button type="button" onClick={handleUpdatePlanOnly} disabled={isQueuingKeyframes || isQueuingVideos} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-50">Update Plan Only</button>
+              <button type="button" onClick={handleBuildPlan} disabled={isQueuingKeyframes || yoloDependencyCheckInProgress} className="rounded-lg bg-sf-accent px-3 py-2 text-xs text-white hover:bg-sf-accent-hover disabled:cursor-not-allowed disabled:opacity-50">
+                {isQueuingKeyframes ? 'Queueing Keyframes...' : 'Looks Good - Create Keyframes'}
+              </button>
             </div>
           </div>
         </div>
@@ -989,8 +1312,16 @@ export default function AdEasyMode({
         <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-900/60 p-4 space-y-4">
           <div>
             <div className="text-[10px] uppercase tracking-[0.14em] text-sf-accent">Storyboard review</div>
-            <h2 className="mt-1 text-lg font-semibold text-sf-text-primary">Your keyframes are ready to review.</h2>
-            <p className="mt-1 text-xs text-sf-text-muted">Select a shot, edit only its keyframe prompt if needed, then regenerate just that shot.</p>
+            <h2 className="mt-1 text-lg font-semibold text-sf-text-primary">
+              {keyframeGeneratingCount > 0
+                ? `Generating keyframes (${yoloStoryboardReadyCount}/${planShots.length} ready).`
+                : yoloStoryboardReadyCount > 0
+                  ? 'Review your generated keyframes.'
+                  : 'Keyframes are queued for generation.'}
+            </h2>
+            <p className="mt-1 text-xs text-sf-text-muted">
+              Completed shots will appear here one by one. You can select a shot, edit its keyframe prompt, and regenerate just that shot.
+            </p>
           </div>
           {planShots.length === 0 ? (
             <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">Build the script plan first.</div>
@@ -1001,6 +1332,7 @@ export default function AdEasyMode({
                   const variant = getFirstVariantForShot(scene.id, shot.id)
                   const asset = variant ? yoloStoryboardAssetMap?.get(variant.key) : null
                   const url = getAssetUrl(asset)
+                  const cardState = getKeyframeCardState(variant, asset)
                   return (
                     <button
                       key={`easy-keyframe-${scene.id}-${shot.id}`}
@@ -1010,12 +1342,36 @@ export default function AdEasyMode({
                         selectedShotIndex === index ? 'border-sf-accent bg-sf-accent/10' : 'border-sf-dark-700 bg-sf-dark-900/70 hover:border-sf-dark-500'
                       }`}
                     >
-                      <div className="flex h-28 items-center justify-center bg-sf-dark-800">
-                        {url ? <img src={url} alt="" className="h-full w-full object-cover" /> : <span className="text-[10px] text-sf-text-muted">Keyframe pending</span>}
+                      <div className={`relative flex h-28 items-center justify-center overflow-hidden ${
+                        cardState.state === 'generating'
+                          ? 'bg-gradient-to-br from-sf-accent/20 via-sf-dark-800 to-purple-500/20'
+                          : cardState.state === 'error'
+                            ? 'bg-red-950/30'
+                            : 'bg-sf-dark-800'
+                      }`}>
+                        {url ? (
+                          <img src={url} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <>
+                            {cardState.state === 'generating' && (
+                              <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+                            )}
+                            <span className={`relative text-[10px] ${
+                              cardState.state === 'error' ? 'text-red-200' : 'text-sf-text-muted'
+                            }`}>
+                              {cardState.label}
+                            </span>
+                          </>
+                        )}
                       </div>
                       <div className="p-2">
                         <div className="text-xs font-semibold text-sf-text-primary">Shot {index + 1}: {shot.id}</div>
                         <div className="mt-1 line-clamp-2 text-[10px] text-sf-text-muted">{shot.imageBeat || shot.beat}</div>
+                        {cardState.job?.progress > 0 && (
+                          <div className="mt-1 h-1 overflow-hidden rounded-full bg-sf-dark-700">
+                            <div className="h-full rounded-full bg-sf-accent" style={{ width: `${Math.min(100, Math.max(0, cardState.job.progress || 0))}%` }} />
+                          </div>
+                        )}
                       </div>
                     </button>
                   )
@@ -1040,7 +1396,8 @@ export default function AdEasyMode({
                     />
                   </label>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <button type="button" disabled={yoloDependencyCheckInProgress} onClick={() => { setKeyframeStatus(`Queued keyframe regeneration for Shot ${selectedShotIndex + 1}.`); void handleQueueYoloShotStoryboard(selectedShotRow.scene.id, selectedShotRow.shot.id) }} className="rounded-lg bg-sf-accent px-3 py-2 text-xs text-white hover:bg-sf-accent-hover disabled:cursor-not-allowed disabled:opacity-50">Regenerate Selected Shot</button>
+                    <button type="button" disabled={isQueuingKeyframes || yoloDependencyCheckInProgress} onClick={() => { setKeyframeStatus(`Queued keyframe regeneration for Shot ${selectedShotIndex + 1}.`); void handleQueueYoloShotStoryboard(selectedShotRow.scene.id, selectedShotRow.shot.id, { resolutionOverride: outputResolution }) }} className="rounded-lg bg-sf-accent px-3 py-2 text-xs text-white hover:bg-sf-accent-hover disabled:cursor-not-allowed disabled:opacity-50">Regenerate Selected Shot</button>
+                    <button type="button" disabled={isQueuingKeyframes || yoloDependencyCheckInProgress || planShots.length === 0} onClick={handleRegenerateAllKeyframes} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-50">Regenerate All</button>
                     <button type="button" onClick={() => { setYoloTakesPerAngle(3); handleYoloShotTakesChange(selectedShotRow.scene.id, selectedShotRow.shot.id, 3); setKeyframeStatus('Variation mode set to 3 takes. Click regenerate to queue three seed variations for the selected shot.') }} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary">Make 3 Variations</button>
                     <span className="text-[10px] text-sf-text-muted">{keyframeStatus}</span>
                   </div>
@@ -1049,8 +1406,10 @@ export default function AdEasyMode({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <button type="button" onClick={() => setStep('script')} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary">Back</button>
                 <div className="flex gap-2">
-                  <button type="button" disabled={yoloDependencyCheckInProgress} onClick={() => { setKeyframeStatus('Queued keyframes for all planned shots.'); void handleQueueYoloStoryboards() }} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary disabled:opacity-50">Queue All Keyframes</button>
-                  <button type="button" disabled={yoloStoryboardReadyCount === 0} onClick={() => setStep('videos')} className="rounded-lg bg-sf-accent px-3 py-2 text-xs text-white hover:bg-sf-accent-hover disabled:cursor-not-allowed disabled:opacity-50">Everything Looks Good - Create Videos</button>
+                  <button type="button" disabled={yoloDependencyCheckInProgress} onClick={() => { setKeyframeStatus('Queued keyframes for all planned shots.'); void handleQueueYoloStoryboards({ resolutionOverride: outputResolution }) }} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary disabled:opacity-50">Queue All Keyframes</button>
+                  <button type="button" disabled={yoloStoryboardReadyCount === 0} onClick={() => setStep('videos')} className="rounded-lg bg-sf-accent px-3 py-2 text-xs text-white hover:bg-sf-accent-hover disabled:cursor-not-allowed disabled:opacity-50">
+                    Next: Choose Video Model
+                  </button>
                 </div>
               </div>
             </>
@@ -1062,18 +1421,42 @@ export default function AdEasyMode({
         <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-900/60 p-4 space-y-4">
           <div>
             <div className="text-[10px] uppercase tracking-[0.14em] text-sf-accent">Video review</div>
-            <h2 className="mt-1 text-lg font-semibold text-sf-text-primary">Review the shot videos.</h2>
-            <p className="mt-1 text-xs text-sf-text-muted">Select a shot video, edit only its motion prompt if needed, then regenerate just that clip.</p>
+            <h2 className="mt-1 text-lg font-semibold text-sf-text-primary">
+              {videoGeneratingCount > 0
+                ? 'Generating shot videos.'
+                : 'Review the shot videos.'}
+            </h2>
+            <p className="mt-1 text-xs text-sf-text-muted">Completed videos will appear here one by one. You can select a shot video, edit only its motion prompt, then regenerate just that clip.</p>
           </div>
           <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 px-3 py-2 text-xs text-sf-text-secondary">
             {planShots.length} shots / {commercialLength}s / Nano Banana 2 keyframes / {selectedVideoWorkflow.label} video
           </div>
+          <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-800/40 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.14em] text-sf-accent">Video model pass</div>
+                <div className="mt-1 text-sm font-semibold text-sf-text-primary">Viewing {selectedVideoWorkflow.label}</div>
+                <p className="mt-1 text-xs text-sf-text-muted">Use the same keyframes to create another complete model pass for comparison in editing.</p>
+              </div>
+              <span className="rounded-full border border-sf-dark-600 px-2 py-1 text-[10px] text-sf-text-muted">{outputResolutionLabel} / {videoFps} fps</span>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {VIDEO_MODEL_OPTIONS.map((option) => renderChoiceButton(videoWorkflowId === option.id, option.label, () => handleVideoWorkflowChange(option.id), option.helper))}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button type="button" disabled={isQueuingVideos || yoloDependencyCheckInProgress || yoloStoryboardReadyCount === 0} onClick={handleRegenerateAllVideos} className="rounded-lg bg-sf-accent px-3 py-2 text-xs text-white hover:bg-sf-accent-hover disabled:cursor-not-allowed disabled:opacity-50">
+                {isQueuingVideos ? `Queueing ${selectedVideoWorkflow.label}...` : `Generate All With ${selectedVideoWorkflow.label}`}
+              </button>
+              <span className="text-[10px] text-sf-text-muted">{videoStatus}</span>
+            </div>
+          </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
             {planShots.map(({ scene, shot }, index) => {
               const variant = getFirstVariantForShot(scene.id, shot.id)
-              const asset = variant ? (videoAssetMap.get(variant.key) || videoAssetMap.get(`${variant.key}::${yoloDefaultVideoWorkflowId}`)) : null
+              const asset = getVideoAssetForVariant(variant)
               const url = getAssetUrl(asset)
               const hasKeyframe = variant ? yoloStoryboardAssetMap?.has(variant.key) : false
+              const cardState = getVideoCardState(variant, asset, hasKeyframe)
               return (
                 <button
                   key={`easy-video-${scene.id}-${shot.id}`}
@@ -1083,12 +1466,36 @@ export default function AdEasyMode({
                     selectedVideoIndex === index ? 'border-sf-accent bg-sf-accent/10' : 'border-sf-dark-700 bg-sf-dark-900/70 hover:border-sf-dark-500'
                   }`}
                 >
-                  <div className="flex h-28 items-center justify-center bg-sf-dark-800">
-                    {url ? <video src={url} className="h-full w-full object-cover" muted /> : <span className="text-[10px] text-sf-text-muted">{hasKeyframe ? 'Video pending' : 'Needs keyframe'}</span>}
+                  <div className={`relative flex h-28 items-center justify-center overflow-hidden ${
+                    cardState.state === 'generating'
+                      ? 'bg-gradient-to-br from-sf-accent/20 via-sf-dark-800 to-purple-500/20'
+                      : cardState.state === 'error'
+                        ? 'bg-red-950/30'
+                        : 'bg-sf-dark-800'
+                  }`}>
+                    {url ? (
+                      <video src={url} className="h-full w-full object-cover" muted />
+                    ) : (
+                      <>
+                        {cardState.state === 'generating' && (
+                          <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+                        )}
+                        <span className={`relative text-[10px] ${
+                          cardState.state === 'error' ? 'text-red-200' : 'text-sf-text-muted'
+                        }`}>
+                          {cardState.label}
+                        </span>
+                      </>
+                    )}
                   </div>
                   <div className="p-2">
                     <div className="text-xs font-semibold text-sf-text-primary">Shot {index + 1}: {shot.id}</div>
-                    <div className="mt-1 text-[10px] text-sf-text-muted">{asset ? 'Video ready' : hasKeyframe ? 'Ready to queue' : 'Create keyframe first'}</div>
+                    <div className="mt-1 text-[10px] text-sf-text-muted">{cardState.label}</div>
+                    {cardState.job?.progress > 0 && (
+                      <div className="mt-1 h-1 overflow-hidden rounded-full bg-sf-dark-700">
+                        <div className="h-full rounded-full bg-sf-accent" style={{ width: `${Math.min(100, Math.max(0, cardState.job.progress || 0))}%` }} />
+                      </div>
+                    )}
                   </div>
                 </button>
               )
@@ -1113,7 +1520,7 @@ export default function AdEasyMode({
                 />
               </label>
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button type="button" disabled={yoloDependencyCheckInProgress} onClick={() => { setVideoStatus(`Queued video regeneration for Shot ${selectedVideoIndex + 1}.`); void handleQueueYoloShotVideo(selectedVideoRow.scene.id, selectedVideoRow.shot.id) }} className="rounded-lg bg-sf-accent px-3 py-2 text-xs text-white hover:bg-sf-accent-hover disabled:cursor-not-allowed disabled:opacity-50">Regenerate Shot Video</button>
+                <button type="button" disabled={isQueuingVideos || yoloDependencyCheckInProgress} onClick={() => { setVideoStatus(`Queued ${selectedVideoWorkflow.label} video regeneration for Shot ${selectedVideoIndex + 1}.`); void handleQueueYoloShotVideo(selectedVideoRow.scene.id, selectedVideoRow.shot.id, { planOverride: yoloActivePlan, skipStaleCheck: true, targetWorkflowIds: [videoWorkflowId], resolutionOverride: outputResolution }) }} className="rounded-lg bg-sf-accent px-3 py-2 text-xs text-white hover:bg-sf-accent-hover disabled:cursor-not-allowed disabled:opacity-50">Regenerate Shot With {selectedVideoWorkflow.label}</button>
                 <button type="button" onClick={() => { setYoloTakesPerAngle(3); handleYoloShotTakesChange(selectedVideoRow.scene.id, selectedVideoRow.shot.id, 3); setVideoStatus('Variation mode set to 3 takes. Click regenerate to queue three video seed variations after keyframes exist.') }} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary">Make 3 Variations</button>
                 <span className="text-[10px] text-sf-text-muted">{videoStatus}</span>
               </div>
@@ -1122,8 +1529,6 @@ export default function AdEasyMode({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <button type="button" onClick={() => setStep('keyframes')} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary">Back</button>
             <div className="flex gap-2">
-              <button type="button" disabled={yoloDependencyCheckInProgress || yoloStoryboardReadyCount === 0} onClick={() => { setVideoStatus('Queued one selected shot video test.'); if (selectedVideoRow) void handleQueueYoloShotVideo(selectedVideoRow.scene.id, selectedVideoRow.shot.id) }} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary disabled:opacity-50">Create One Test Video First</button>
-              <button type="button" disabled={yoloDependencyCheckInProgress || yoloStoryboardReadyCount === 0} onClick={() => { setVideoStatus('Queued videos for all keyframed shots.'); void handleQueueYoloVideos() }} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary disabled:opacity-50">Queue All Shot Videos</button>
               <button type="button" onClick={() => setStep('done')} className="rounded-lg bg-sf-accent px-3 py-2 text-xs text-white hover:bg-sf-accent-hover">Approve Videos and Finish</button>
             </div>
           </div>
@@ -1133,9 +1538,9 @@ export default function AdEasyMode({
       {step === 'done' && (
         <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-900/60 p-4 space-y-3">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.14em] text-sf-accent">Queued</div>
-            <h2 className="mt-1 text-lg font-semibold text-sf-text-primary">Your ad is generating.</h2>
-            <p className="mt-1 text-xs text-sf-text-muted">Watch progress in the queue. You can still return to Keyframes or Videos to regenerate individual shots.</p>
+            <div className="text-[10px] uppercase tracking-[0.14em] text-sf-accent">Complete</div>
+            <h2 className="mt-1 text-lg font-semibold text-sf-text-primary">Your ad is complete.</h2>
+            <p className="mt-1 text-xs text-sf-text-muted">You can still return to Keyframes or Videos to regenerate individual shots.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => setStep('keyframes')} className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary">Open Keyframes</button>

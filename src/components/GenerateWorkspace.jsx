@@ -4813,7 +4813,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   ), [])
 
   const buildYoloAdPlan = useCallback((options = {}) => {
-    if (!yoloScript.trim()) {
+    const scriptToUse = Object.prototype.hasOwnProperty.call(options, 'scriptOverride')
+      ? String(options.scriptOverride || '')
+      : yoloScript
+    if (!scriptToUse.trim()) {
       setFormError('Paste an ad script first, then click Build Plan')
       return null
     }
@@ -4824,11 +4827,23 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       setYoloStyleNotes(effectiveAdStyleNotes)
     }
     const combinedAdStyleNotes = [effectiveAdStyleNotes, yoloAdReferenceStyleNotes].filter(Boolean).join(' ')
-    const nextPlan = buildYoloPlanFromScript(yoloScript, {
-      targetDurationSeconds: yoloTargetDuration,
-      shotsPerScene: yoloShotsPerScene,
-      anglesPerShot: yoloAnglesPerShot,
-      takesPerAngle: yoloTakesPerAngle,
+    const targetDuration = Object.prototype.hasOwnProperty.call(options, 'targetDurationOverride')
+      ? Number(options.targetDurationOverride) || yoloTargetDuration
+      : yoloTargetDuration
+    const shotsPerScene = Object.prototype.hasOwnProperty.call(options, 'shotsPerSceneOverride')
+      ? Number(options.shotsPerSceneOverride) || yoloShotsPerScene
+      : yoloShotsPerScene
+    const anglesPerShot = Object.prototype.hasOwnProperty.call(options, 'anglesPerShotOverride')
+      ? Number(options.anglesPerShotOverride) || yoloAnglesPerShot
+      : yoloAnglesPerShot
+    const takesPerAngle = Object.prototype.hasOwnProperty.call(options, 'takesPerAngleOverride')
+      ? Number(options.takesPerAngleOverride) || yoloTakesPerAngle
+      : yoloTakesPerAngle
+    const nextPlan = buildYoloPlanFromScript(scriptToUse, {
+      targetDurationSeconds: targetDuration,
+      shotsPerScene,
+      anglesPerShot,
+      takesPerAngle,
       styleNotes: combinedAdStyleNotes,
     })
     if (nextPlan.length === 0) {
@@ -4836,12 +4851,33 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       return null
     }
     const normalizedPlan = normalizeGeneratedYoloPlan(nextPlan)
+    const nextPlanSignature = createYoloPlanSignature({
+      mode: 'ad',
+      script: scriptToUse,
+      styleNotes: effectiveAdStyleNotes,
+      referenceStyleNotes: yoloAdReferenceStyleNotes,
+      targetDuration,
+      shotsPerScene,
+      anglesPerShot,
+      takesPerAngle,
+      productAssetId: Object.prototype.hasOwnProperty.call(options, 'productAssetIdOverride') ? (options.productAssetIdOverride || '') : (yoloAdProductAsset?.id || ''),
+      modelAssetId: Object.prototype.hasOwnProperty.call(options, 'modelAssetIdOverride') ? (options.modelAssetIdOverride || '') : (yoloAdModelAsset?.id || ''),
+      voiceoverAssetId: yoloAdVoiceoverAsset?.id || '',
+      productName: Object.prototype.hasOwnProperty.call(options, 'productNameOverride') ? (options.productNameOverride || '') : yoloAdProductName,
+      brandName: Object.prototype.hasOwnProperty.call(options, 'brandNameOverride') ? (options.brandNameOverride || '') : yoloAdBrandName,
+      colorPalette: Object.prototype.hasOwnProperty.call(options, 'colorPaletteOverride') ? (options.colorPaletteOverride || '') : yoloAdColorPalette,
+      logoConstraints: Object.prototype.hasOwnProperty.call(options, 'logoConstraintsOverride') ? (options.logoConstraintsOverride || '') : yoloAdLogoConstraints,
+      spokespersonRole: Object.prototype.hasOwnProperty.call(options, 'spokespersonRoleOverride') ? (options.spokespersonRoleOverride || '') : yoloAdSpokespersonRole,
+      wardrobeNotes: Object.prototype.hasOwnProperty.call(options, 'wardrobeNotesOverride') ? (options.wardrobeNotesOverride || '') : yoloAdWardrobeNotes,
+      formatPreset: Object.prototype.hasOwnProperty.call(options, 'formatPresetOverride') ? (options.formatPresetOverride || '') : yoloAdFormatPreset,
+      platformPreset: Object.prototype.hasOwnProperty.call(options, 'platformPresetOverride') ? (options.platformPresetOverride || '') : yoloAdPlatformPreset,
+      consistency: yoloAdConsistency,
+    })
     setYoloPlan(normalizedPlan)
-    setYoloPlanSignature(currentYoloAdPlanSignature)
+    setYoloPlanSignature(nextPlanSignature)
     setFormError(null)
     return normalizedPlan
   }, [
-    currentYoloAdPlanSignature,
     normalizeGeneratedYoloPlan,
     yoloAnglesPerShot,
     yoloScript,
@@ -4850,6 +4886,18 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloStyleNotes,
     yoloTakesPerAngle,
     yoloTargetDuration,
+    yoloAdProductAsset?.id,
+    yoloAdModelAsset?.id,
+    yoloAdVoiceoverAsset?.id,
+    yoloAdProductName,
+    yoloAdBrandName,
+    yoloAdColorPalette,
+    yoloAdLogoConstraints,
+    yoloAdSpokespersonRole,
+    yoloAdWardrobeNotes,
+    yoloAdFormatPreset,
+    yoloAdPlatformPreset,
+    yoloAdConsistency,
   ])
 
   /**
@@ -4982,7 +5030,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const buildActiveYoloPlan = useCallback((options = {}) => (
     isYoloMusicMode ? buildYoloMusicPlan(options) : buildYoloAdPlan(options)
   ), [buildYoloAdPlan, buildYoloMusicPlan, isYoloMusicMode])
-  const handleBuildActiveYoloPlan = useCallback(() => {
+  const handleBuildActiveYoloPlan = useCallback((options = {}) => {
     if (isYoloMusicMode) {
       // Reset the active target's plan first so the Build → reflow
       // produces clean state. Master uses the dedicated yoloMusicPlan
@@ -5001,7 +5049,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       setYoloPlan([])
       setYoloPlanSignature('')
     }
-    const nextPlan = buildActiveYoloPlan({ styleNotesOverride: '' })
+    const nextPlan = buildActiveYoloPlan({ styleNotesOverride: '', ...(options || {}) })
     if (Array.isArray(nextPlan) && nextPlan.length > 0) {
       setDirectorSubTab('scene-shot')
     }
@@ -5327,6 +5375,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       allowExistingDoneKeys = false,
       skipConfirm = false,
       sourceLabel = `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} keyframe pass`,
+      productAssetIdOverride = undefined,
+      modelAssetIdOverride = undefined,
+      resolutionOverride = null,
     } = options
 
     if (!Array.isArray(variants) || variants.length === 0) {
@@ -5374,9 +5425,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       return Number.isFinite(parsed) ? parsed : fallback
     }
     const usesModelProductStoryboardWorkflow = yoloStoryboardWorkflowId === 'image-edit-model-product'
+    const effectiveAdProductAsset = productAssetIdOverride !== undefined
+      ? (assets.find((asset) => asset?.id === productAssetIdOverride) || null)
+      : yoloAdProductAsset
+    const effectiveAdModelAsset = modelAssetIdOverride !== undefined
+      ? (assets.find((asset) => asset?.id === modelAssetIdOverride) || null)
+      : yoloAdModelAsset
     const storyboardInputAsset = usesModelProductStoryboardWorkflow
-      ? (yoloAdModelAsset || yoloAdProductAsset || null)
+      ? (effectiveAdModelAsset || effectiveAdProductAsset || null)
       : null
+    const storyboardResolution = {
+      width: Number(resolutionOverride?.width) || effectiveImageResolution.width,
+      height: Number(resolutionOverride?.height) || effectiveImageResolution.height,
+    }
     const jobs = variantsToQueue.map((variant, index) => {
       const sceneNum = extractNumericId(variant.sceneId, index + 1)
       const shotNum = extractNumericId(variant.shotId, 1)
@@ -5400,6 +5461,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         needsImage: usesModelProductStoryboardWorkflow,
         prompt: variant.storyboardPrompt || variant.prompt,
         seed: storyboardSeed,
+        resolution: storyboardResolution,
         inputAssetId: storyboardInputAsset?.id || null,
         inputAssetName: storyboardInputAsset?.name || '',
         inputFromTimelineFrame: false,
@@ -5414,10 +5476,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         // in the Script tab when an artist is picked with that workflow.
         referenceAssetId1: isYoloMusicMode
           ? (variant.resolvedArtistAssetIds?.[0] || yoloMusicArtistAsset?.id || null)
-          : (yoloAdProductAsset?.id || null),
+          : (effectiveAdProductAsset?.id || null),
         referenceAssetId2: isYoloMusicMode
           ? (variant.resolvedArtistAssetIds?.[1] || null)
-          : (yoloAdModelAsset?.id || null),
+          : (effectiveAdModelAsset?.id || null),
         directorLabel: yoloQueueNameLabel,
         yolo: {
           mode: yoloModeKey,
@@ -5458,9 +5520,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     isYoloMusicMode,
     negativePrompt,
     seed,
+    assets,
     yoloAdConsistency,
     yoloAdModelAsset,
     yoloAdModelAsset?.id,
+    effectiveImageResolution.height,
+    effectiveImageResolution.width,
     yoloMusicArtistAsset,
     yoloMusicArtistAsset?.id,
     yoloMusicQualityProfile,
@@ -5474,21 +5539,40 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloQueueNameLabel,
   ])
 
-  const handleQueueYoloStoryboards = useCallback(async () => {
-    if (!isConnected) return
-    if (yoloActivePlanIsStale) {
+  const handleQueueYoloStoryboards = useCallback(async (options = {}) => {
+    const {
+      planOverride = null,
+      skipStaleCheck = false,
+      skipConfirm = false,
+      sourceLabel = `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} keyframe pass`,
+      allowExistingDoneKeys = false,
+      productAssetIdOverride = undefined,
+      modelAssetIdOverride = undefined,
+      resolutionOverride = null,
+    } = options || {}
+    if (!isConnected) {
+      setFormError('ComfyUI is not connected yet. Start ComfyUI, then queue keyframes.')
+      return 0
+    }
+    if (yoloActivePlanIsStale && !skipStaleCheck) {
       setFormError('Director plan is out of date. Click Build Plan again to apply the current script, references, and style settings.')
       setDirectorSubTab('plan-script')
-      return
+      return 0
     }
+    const effectiveProductAsset = productAssetIdOverride !== undefined
+      ? (assets.find((asset) => asset?.id === productAssetIdOverride) || null)
+      : yoloAdProductAsset
+    const effectiveModelAsset = modelAssetIdOverride !== undefined
+      ? (assets.find((asset) => asset?.id === modelAssetIdOverride) || null)
+      : yoloAdModelAsset
     if (
       !isYoloMusicMode &&
       ['image-edit-model-product', 'seedream-5-lite-image-edit'].includes(String(yoloStoryboardWorkflowId || '').trim()) &&
-      !yoloAdModelAsset &&
-      !yoloAdProductAsset
+      !effectiveModelAsset &&
+      !effectiveProductAsset
     ) {
       setFormError('Selected keyframe workflow needs at least a model or product reference image.')
-      return
+      return 0
     }
     if (
       !isYoloMusicMode &&
@@ -5496,24 +5580,30 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       !yoloStoryboardSupportsReferenceAnchors
     ) {
       setFormError(`Product/model references are not supported by ${getWorkflowDisplayLabel(yoloStoryboardWorkflowId)} keyframes.`)
-      return
+      return 0
     }
     const depsOk = await validateDependenciesForQueue(
       [yoloStoryboardWorkflowId],
-      `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} keyframe pass`
+      sourceLabel
     )
-    if (!depsOk) return
+    if (!depsOk) return 0
 
-    const planToUse = yoloActivePlan.length > 0 ? yoloActivePlan : buildActiveYoloPlan()
-    if (!planToUse) return
+    const planToUse = Array.isArray(planOverride) && planOverride.length > 0
+      ? planOverride
+      : (yoloActivePlan.length > 0 ? yoloActivePlan : buildActiveYoloPlan())
+    if (!planToUse) return 0
 
     const variants = flattenYoloPlanVariants(planToUse)
-    await queueYoloStoryboardVariants(variants, {
-      allowExistingDoneKeys: false,
-      skipConfirm: false,
-      sourceLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} keyframe pass`,
+    return await queueYoloStoryboardVariants(variants, {
+      allowExistingDoneKeys,
+      skipConfirm,
+      sourceLabel,
+      productAssetIdOverride,
+      modelAssetIdOverride,
+      resolutionOverride,
     })
   }, [
+    assets,
     buildActiveYoloPlan,
     isConnected,
     isYoloMusicMode,
@@ -5529,7 +5619,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloModeLabel,
   ])
 
-  const handleQueueYoloShotStoryboard = useCallback(async (sceneId, shotId) => {
+  const handleQueueYoloShotStoryboard = useCallback(async (sceneId, shotId, options = {}) => {
+    const {
+      resolutionOverride = null,
+    } = options || {}
     if (!isConnected) return
     if (yoloActivePlanIsStale) {
       setFormError('Director plan is out of date. Click Build Plan again before re-rendering keyframes.')
@@ -5573,6 +5666,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       allowExistingDoneKeys: true,
       skipConfirm: true,
       sourceLabel: `Queued keyframe re-render for ${sceneId} ${shotId}`,
+      resolutionOverride,
     })
   }, [
     buildActiveYoloPlan,
@@ -5596,6 +5690,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       workflowId = yoloDefaultVideoWorkflowId,
       suppressEmptyError = false,
       sourceLabel = `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} video pass`,
+      resolutionOverride = null,
     } = options
 
     if (!Array.isArray(variants) || variants.length === 0) {
@@ -5651,6 +5746,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     const jobs = []
     let missing = 0
     let seedOffset = 0
+    const videoResolution = {
+      width: Number(resolutionOverride?.width) || resolution.width,
+      height: Number(resolutionOverride?.height) || resolution.height,
+    }
     for (const variant of variantsToQueue) {
       const storyboardAsset = yoloStoryboardAssetMap.get(variant.key)
       if (!storyboardAsset) {
@@ -5716,6 +5815,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         duration: musicShotPayload?.length || videoDuration,
         fps: requestedFps,
         seed: Number(seed) + seedOffset,
+        resolution: videoResolution,
         referenceAssetId1: null,
         referenceAssetId2: null,
         directorLabel: yoloQueueNameLabel,
@@ -5787,6 +5887,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     isYoloMusicMode,
     negativePrompt,
     seed,
+    resolution.height,
+    resolution.width,
     yoloActivePlan,
     yoloAdBrandName,
     yoloAdProductName,
@@ -5804,35 +5906,59 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloStoryboardAssetMap,
   ])
 
-  const handleQueueYoloVideos = useCallback(async () => {
-    if (!isConnected) return
-    if (yoloActivePlanIsStale) {
+  const handleQueueYoloVideos = useCallback(async (options = {}) => {
+    const {
+      planOverride = null,
+      skipStaleCheck = false,
+      skipConfirm = false,
+      sourceLabel = `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} video pass`,
+      allowExistingDoneKeys = false,
+      targetWorkflowIds = null,
+      resolutionOverride = null,
+    } = options || {}
+    if (!isConnected) {
+      setFormError('ComfyUI is not connected yet. Start ComfyUI, then queue videos.')
+      return 0
+    }
+    if (yoloActivePlanIsStale && !skipStaleCheck) {
       setFormError('Director plan is out of date. Click Build Plan again before queueing videos.')
       setDirectorSubTab('plan-script')
-      return
+      return 0
     }
-    const planToUse = yoloActivePlan.length > 0 ? yoloActivePlan : buildActiveYoloPlan()
-    if (!planToUse) return
+    const planToUse = Array.isArray(planOverride) && planOverride.length > 0
+      ? planOverride
+      : (yoloActivePlan.length > 0 ? yoloActivePlan : buildActiveYoloPlan())
+    if (!planToUse) return 0
 
     const variants = flattenYoloPlanVariants(planToUse)
     if (variants.length === 0) {
       setFormError('No queueable shots. Build a plan first.')
-      return
+      return 0
     }
 
-    const targets = yoloSelectedVideoWorkflowIds
+    const targets = Array.from(new Set(
+      (Array.isArray(targetWorkflowIds) && targetWorkflowIds.length > 0
+        ? targetWorkflowIds
+        : yoloSelectedVideoWorkflowIds)
+        .map((id) => String(id || '').trim())
+        .filter(Boolean)
+    ))
+    if (targets.length === 0) {
+      setFormError('Choose a video workflow before queueing videos.')
+      return 0
+    }
     const depsOk = await validateDependenciesForQueue(
       targets,
-      `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} video pass`
+      sourceLabel
     )
-    if (!depsOk) return
+    if (!depsOk) return 0
 
-    if (targets.length > 1) {
+    if (targets.length > 1 && !skipConfirm) {
       const estimatedJobs = variants.length * targets.length
       const confirmed = await confirmLargeQueueBatch(estimatedJobs, 'video')
       if (!confirmed) {
         setFormError('Queue cancelled')
-        return
+        return 0
       }
     }
 
@@ -5840,15 +5966,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     for (const targetWorkflowId of targets) {
       totalQueued += await queueYoloVideoVariants(variants, {
         workflowId: targetWorkflowId,
-        allowExistingDoneKeys: false,
-        skipConfirm: targets.length > 1,
+        allowExistingDoneKeys,
+        skipConfirm: skipConfirm || targets.length > 1,
         suppressEmptyError: targets.length > 1,
-        sourceLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} video pass (${getWorkflowDisplayLabel(targetWorkflowId)})`,
+        resolutionOverride,
+        sourceLabel: targets.length > 1
+          ? `${sourceLabel} (${getWorkflowDisplayLabel(targetWorkflowId)})`
+          : sourceLabel,
       })
     }
     if (totalQueued === 0) {
       setFormError('No video jobs were queued. If they already completed, use Queue Shot Video for targeted reruns.')
     }
+    return totalQueued
   }, [
     buildActiveYoloPlan,
     confirmLargeQueueBatch,
@@ -5972,20 +6102,39 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloStoryboardAssetMap,
   ])
 
-  const handleQueueYoloShotVideo = useCallback(async (sceneId, shotId) => {
+  const handleQueueYoloShotVideo = useCallback(async (sceneId, shotId, options = {}) => {
+    const {
+      planOverride = null,
+      skipStaleCheck = false,
+      targetWorkflowIds = null,
+      resolutionOverride = null,
+    } = options || {}
     if (!isConnected) return
-    if (yoloActivePlanIsStale) {
+    if (yoloActivePlanIsStale && !skipStaleCheck) {
       setFormError('Director plan is out of date. Click Build Plan again before creating shot video.')
       setDirectorSubTab('plan-script')
       return
     }
+    const targets = Array.from(new Set(
+      (Array.isArray(targetWorkflowIds) && targetWorkflowIds.length > 0
+        ? targetWorkflowIds
+        : yoloSelectedVideoWorkflowIds)
+        .map((id) => String(id || '').trim())
+        .filter(Boolean)
+    ))
+    if (targets.length === 0) {
+      setFormError('Choose a video workflow before creating shot video.')
+      return
+    }
     const depsOk = await validateDependenciesForQueue(
-      yoloSelectedVideoWorkflowIds,
+      targets,
       `video re-render for ${sceneId} ${shotId}`
     )
     if (!depsOk) return
 
-    const planToUse = yoloActivePlan.length > 0 ? yoloActivePlan : buildActiveYoloPlan()
+    const planToUse = Array.isArray(planOverride) && planOverride.length > 0
+      ? planOverride
+      : (yoloActivePlan.length > 0 ? yoloActivePlan : buildActiveYoloPlan())
     if (!planToUse) return
 
     const variants = flattenYoloPlanVariants(planToUse)
@@ -5996,12 +6145,13 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }
 
     let totalQueued = 0
-    for (const targetWorkflowId of yoloSelectedVideoWorkflowIds) {
+    for (const targetWorkflowId of targets) {
       totalQueued += await queueYoloVideoVariants(variants, {
         workflowId: targetWorkflowId,
         allowExistingDoneKeys: true,
         skipConfirm: true,
-        suppressEmptyError: yoloSelectedVideoWorkflowIds.length > 1,
+        suppressEmptyError: targets.length > 1,
+        resolutionOverride,
         sourceLabel: `Queued video re-render for ${sceneId} ${shotId} (${getWorkflowDisplayLabel(targetWorkflowId)})`,
       })
     }
@@ -6787,13 +6937,41 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         }
         return asset.url || null
       }
+      const getUploadExtension = (asset, blob, fallbackName) => {
+        const candidates = [fallbackName, asset?.path, asset?.name].filter(Boolean)
+        for (const candidate of candidates) {
+          const match = String(candidate).match(/\.([a-zA-Z0-9]{1,8})(?:[?#].*)?$/)
+          if (match) return `.${match[1].toLowerCase()}`
+        }
+        const mimeType = blob?.type || asset?.mimeType || ''
+        if (mimeType.includes('jpeg')) return '.jpg'
+        if (mimeType.includes('png')) return '.png'
+        if (mimeType.includes('webp')) return '.webp'
+        if (mimeType.includes('gif')) return '.gif'
+        if (mimeType.includes('mp4')) return '.mp4'
+        if (mimeType.includes('mpeg')) return '.mp3'
+        if (mimeType.includes('wav')) return '.wav'
+        return ''
+      }
+      const getSafeUploadName = (asset, blob, fallbackName) => {
+        const fallback = fallbackName || `asset_${Date.now()}`
+        const extension = getUploadExtension(asset, blob, fallback)
+        const rawBase = String(asset?.name || fallback)
+          .replace(/\.[a-zA-Z0-9]{1,8}$/, '')
+          .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+          .replace(/\s+/g, '_')
+          .replace(/_+/g, '_')
+          .replace(/^_+|_+$/g, '')
+        const base = rawBase || String(fallback).replace(/\.[a-zA-Z0-9]{1,8}$/, '') || 'asset'
+        return `${base.slice(0, 80)}${extension}`
+      }
       const createFileFromJobAsset = async (asset, fallbackName) => {
         const assetUrl = await getJobAssetUrl(asset)
         if (!assetUrl) return null
         const resp = await fetch(assetUrl)
         if (!resp.ok) throw new Error(`Could not read asset ${asset.name || fallbackName}`)
         const blob = await resp.blob()
-        return new File([blob], asset.name || fallbackName || `asset_${Date.now()}`, {
+        return new File([blob], getSafeUploadName(asset, blob, fallbackName), {
           type: blob.type || asset.mimeType || 'application/octet-stream',
         })
       }
@@ -8105,11 +8283,11 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                 {isAdEasyMode ? (
                   <AdEasyMode
                     assets={assets}
+                    generationQueue={generationQueue}
                     yoloActivePlan={yoloActivePlan}
                     yoloQueueVariants={yoloQueueVariants}
                     yoloStoryboardAssetMap={yoloStoryboardAssetMap}
                     yoloStoryboardReadyCount={yoloStoryboardReadyCount}
-                    yoloDefaultVideoWorkflowId={yoloDefaultVideoWorkflowId}
                     yoloDependencyCheckInProgress={yoloDependencyCheckInProgress}
                     yoloScript={yoloScript}
                     setYoloScript={setYoloScript}

@@ -15,6 +15,21 @@ const GLSL_EFFECT_IDS = new Set([
   'glslVignette',
 ])
 
+export const GLSL_PREVIEW_QUALITY_SCALE = {
+  full: 1,
+  half: 0.5,
+  quarter: 0.25,
+  eighth: 0.125,
+}
+
+export function normalizeGlslPreviewQuality(quality) {
+  return Object.prototype.hasOwnProperty.call(GLSL_PREVIEW_QUALITY_SCALE, quality) ? quality : 'full'
+}
+
+export function getGlslPreviewQualityScale(quality) {
+  return GLSL_PREVIEW_QUALITY_SCALE[normalizeGlslPreviewQuality(quality)]
+}
+
 const VERTEX_SHADER_SOURCE = `
 attribute vec2 a_position;
 attribute vec2 a_texCoord;
@@ -846,6 +861,8 @@ export function createGlslEffectRenderer(canvas) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+  const uploadCanvas = document.createElement('canvas')
+  const uploadCtx = uploadCanvas.getContext('2d', { alpha: true })
 
   const render = (source, effects, clipTime = 0, size = null) => {
     if (!sourceIsReady(source)) return false
@@ -854,6 +871,21 @@ export function createGlslEffectRenderer(canvas) {
     const height = Math.max(1, Math.round(Number(size?.height) || sourceDimensions.height))
     if (canvas.width !== width) canvas.width = width
     if (canvas.height !== height) canvas.height = height
+    let textureSource = source
+    if (
+      uploadCtx
+      && sourceDimensions.width > 0
+      && sourceDimensions.height > 0
+      && (sourceDimensions.width !== width || sourceDimensions.height !== height)
+    ) {
+      if (uploadCanvas.width !== width) uploadCanvas.width = width
+      if (uploadCanvas.height !== height) uploadCanvas.height = height
+      uploadCtx.clearRect(0, 0, width, height)
+      uploadCtx.imageSmoothingEnabled = true
+      uploadCtx.imageSmoothingQuality = width < sourceDimensions.width || height < sourceDimensions.height ? 'low' : 'high'
+      uploadCtx.drawImage(source, 0, 0, width, height)
+      textureSource = uploadCanvas
+    }
 
     const uniforms = getAnimatedGlslEffectUniforms(effects, clipTime)
 
@@ -865,7 +897,7 @@ export function createGlslEffectRenderer(canvas) {
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, texture)
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textureSource)
 
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer)
     gl.enableVertexAttribArray(positionLocation)
@@ -965,16 +997,21 @@ function getExportRenderer(width, height) {
   return renderer
 }
 
-export function applyGlslEffectsToCanvas(canvas, ctx, width, height, effects, clipTime = 0) {
+export function applyGlslEffectsToCanvas(canvas, ctx, width, height, effects, clipTime = 0, qualityScale = 1) {
   if (!canvas || !ctx || !hasGlslEffect(effects)) return false
   try {
-    const renderer = getExportRenderer(width, height)
-    const rendered = renderer.render(canvas, effects, clipTime, { width, height })
+    const safeQualityScale = Math.max(0.05, Math.min(1, Number(qualityScale) || 1))
+    const renderWidth = Math.max(1, Math.round(width * safeQualityScale))
+    const renderHeight = Math.max(1, Math.round(height * safeQualityScale))
+    const renderer = getExportRenderer(renderWidth, renderHeight)
+    const rendered = renderer.render(canvas, effects, clipTime, { width: renderWidth, height: renderHeight })
     if (!rendered) return false
     ctx.save()
     ctx.filter = 'none'
     ctx.globalAlpha = 1
     ctx.globalCompositeOperation = 'copy'
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = safeQualityScale < 0.999 ? 'low' : 'high'
     ctx.drawImage(renderer.canvas, 0, 0, width, height)
     ctx.restore()
     return true

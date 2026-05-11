@@ -21,6 +21,13 @@ import { getAudioClipFadeValues } from '../utils/audioClipFades'
 import { getEffectTypeDefinition } from '../utils/effects'
 import { isTextEditingElement } from '../utils/keyboardFocus'
 import {
+  formatSecondsFrames,
+  formatTimecode as formatFrameTimecode,
+  getSafeTimelineFps,
+  getTimecodeFrameRate,
+  quantizeTimeToFrame,
+} from '../utils/timelineFrames'
+import {
   DEFAULT_EDITOR_HOTKEYS,
   EDITOR_HOTKEYS_CHANGED_EVENT,
   EDITOR_HOTKEY_IDS,
@@ -64,27 +71,6 @@ const TIMELINE_TOOL_LABELS = Object.freeze({
   [TIMELINE_TOOLS.RAZOR]: 'Razor tool',
   [TIMELINE_TOOLS.SLIP]: 'Slip tool',
 })
-const padTimecode2 = (value) => String(value).padStart(2, '0')
-
-const formatTimecodeWithFps = (seconds, fps) => {
-  const roundedFps = Math.max(1, Math.round(Number(fps) || FRAME_RATE))
-  const totalFrames = Math.max(0, Math.floor((Number(seconds) || 0) * roundedFps))
-  const frames = totalFrames % roundedFps
-  const totalSeconds = Math.floor(totalFrames / roundedFps)
-  const ss = totalSeconds % 60
-  const mm = Math.floor(totalSeconds / 60) % 60
-  const hh = Math.floor(totalSeconds / 3600)
-  return `${padTimecode2(hh)}:${padTimecode2(mm)}:${padTimecode2(ss)}:${padTimecode2(frames)}`
-}
-
-const formatSecondsFrames = (seconds, fps) => {
-  const roundedFps = Math.max(1, Math.round(Number(fps) || FRAME_RATE))
-  const totalFrames = Math.max(0, Math.round((Number(seconds) || 0) * roundedFps))
-  const wholeSeconds = Math.floor(totalFrames / roundedFps)
-  const frames = totalFrames % roundedFps
-  return `${wholeSeconds}:${padTimecode2(frames)}`
-}
-
 const sanitizeTimelineOffsetInput = (value) => {
   const raw = String(value || '').replace(/\s+/g, '')
   if (!raw) return ''
@@ -886,7 +872,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     e.preventDefault()
     e.stopPropagation()
     selectGap(gap)
-    setPlayheadPosition(time)
+    setPlayheadPosition(time, { snap: true })
   }, [getTimeFromMouseEvent, getTrackGapAtTime, selectGap, setPlayheadPosition])
   const clipContextSelectionIds = useMemo(() => (
     clipContextMenu ? getContextSelectionClipIds(clipContextMenu.clipId) : []
@@ -1413,8 +1399,8 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     if (!timelineRef.current) return 0
     const rect = timelineRef.current.getBoundingClientRect()
     const x = clientX - rect.left + timelineRef.current.scrollLeft
-    const time = x / pixelsPerSecond
-    return Math.max(0, Math.min(duration, time))
+    const time = Math.max(0, Math.min(duration, x / pixelsPerSecond))
+    return quantizeTimeToFrame(time, timecodeFps)
   }
 
   // Calculate time from mouse position
@@ -1511,7 +1497,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     
     // Immediately move playhead to click position
     const time = getTimeFromMouseEvent(e)
-    setPlayheadPosition(time)
+    setPlayheadPosition(time, { snap: true })
   }
 
   // Handle scrubbing mouse move and mouse up
@@ -1537,7 +1523,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
       if (scrollDelta !== 0) {
         scrollEl.scrollLeft = Math.max(0, Math.min(maxScrollLeft, previousScrollLeft + scrollDelta))
       }
-      setPlayheadPosition(getTimeFromClientX(clientX))
+        setPlayheadPosition(getTimeFromClientX(clientX), { snap: true })
       return scrollEl.scrollLeft !== previousScrollLeft
     }
 
@@ -1581,7 +1567,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [isScrubbing, pixelsPerSecond, duration, setPlayheadPosition])
+  }, [isScrubbing, pixelsPerSecond, duration, timecodeFps, setPlayheadPosition])
 
   useEffect(() => {
     if (!pendingLanePointerState) return
@@ -1612,7 +1598,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
 
     const handleMouseUp = () => {
       selectGap(pendingLanePointerState.gap)
-      setPlayheadPosition(pendingLanePointerState.time)
+          setPlayheadPosition(pendingLanePointerState.time, { snap: true })
       setPendingLanePointerState(null)
     }
 
@@ -2124,7 +2110,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     }
 
     if (targetTime === null) return false
-    setPlayheadPosition(targetTime)
+    setPlayheadPosition(targetTime, { snap: true })
     ensureTimelineTimeVisible(targetTime)
     return true
   }, [ensureTimelineTimeVisible, playheadPosition, setPlayheadPosition, visibleClipBoundaryTimes])
@@ -2147,7 +2133,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     }
 
     if (!targetMarker) return false
-    setPlayheadPosition(targetMarker.time)
+    setPlayheadPosition(targetMarker.time, { snap: true })
     ensureTimelineTimeVisible(targetMarker.time)
     selectMarker(targetMarker.id)
     return true
@@ -3413,7 +3399,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
       const newClip = splitClipAtTime(clip, splitTime, { saveHistory: true })
       if (newClip) {
         selectClip(newClip.id)
-        setPlayheadPosition(splitTime)
+        setPlayheadPosition(splitTime, { snap: true })
       }
       return
     }
@@ -3942,11 +3928,14 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
       // Check if clips are adjacent (small gap) OR overlapping (transition exists)
       const gap = clipB.startTime - clipAEnd
       const isOverlapping = clipB.startTime < clipAEnd
+      const frameDuration = 1 / (timelineFps || FRAME_RATE)
+      const trueEditPointTolerance = Math.min(0.001, frameDuration / 10)
+      const isTrueEditPoint = Math.abs(gap) <= trueEditPointTolerance
       
       if (isOverlapping || Math.abs(gap) < ADJACENT_CLIP_UI_GAP_SECONDS) {
         // Check if there's a transition between these clips
         const transition = getTransitionBetween(clipA.id, clipB.id)
-        pairs.push({ clipA, clipB, transition, isOverlapping, gap })
+        pairs.push({ clipA, clipB, transition, isOverlapping, gap, isTrueEditPoint })
       }
     }
     return pairs
@@ -4115,7 +4104,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     }
   }, [trackResizeState])
 
-  const formatTimelineTimecode = (seconds) => formatTimecodeWithFps(seconds, timecodeFps)
+  const formatTimelineTimecode = (seconds) => formatFrameTimecode(seconds, timecodeFps)
 
   const getMajorRulerStep = (pixelsPerSec) => {
     // Keep labels readable while allowing finer granularity at high zoom.
@@ -4127,20 +4116,33 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
   const rulerTicks = useMemo(() => {
     const majorStep = getMajorRulerStep(pixelsPerSecond)
     const minorDivisions = majorStep >= 60 ? 6 : (majorStep >= 10 ? 5 : (majorStep >= 1 ? 4 : 5))
-    const minorStep = majorStep / minorDivisions
+    const safeFps = getSafeTimelineFps(timecodeFps, FRAME_RATE)
+    const displayFps = getTimecodeFrameRate(timecodeFps, FRAME_RATE)
+    const majorFrameStep = Math.max(1, Math.round(majorStep * safeFps))
+    const minorFrameStep = majorFrameStep <= displayFps
+      ? 1
+      : Math.max(1, Math.round(majorFrameStep / minorDivisions))
+    const maxFrame = Math.ceil(duration * safeFps)
     const major = []
     const minor = []
-    const maxSteps = Math.ceil(duration / minorStep)
+    const majorFrames = new Set()
 
-    for (let i = 0; i <= maxSteps; i++) {
-      const time = Number((i * minorStep).toFixed(6))
+    for (let frame = 0; frame <= maxFrame; frame += majorFrameStep) {
+      const time = frame / safeFps
       if (time > duration + 1e-6) break
-      if (i % minorDivisions === 0) major.push(time)
-      else minor.push(time)
+      majorFrames.add(frame)
+      major.push(time)
     }
 
-    return { major, minor, majorStep, minorStep }
-  }, [duration, pixelsPerSecond])
+    for (let frame = 0; frame <= maxFrame; frame += minorFrameStep) {
+      if (majorFrames.has(frame)) continue
+      const time = frame / safeFps
+      if (time > duration + 1e-6) break
+      minor.push(time)
+    }
+
+    return { major, minor, majorStep, minorStep: minorFrameStep / safeFps }
+  }, [duration, pixelsPerSecond, timecodeFps])
 
   return (
     <div className="h-full bg-sf-dark-900 border-t border-sf-dark-700 flex flex-col">
@@ -4786,7 +4788,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                 e.stopPropagation()
                 const time = getTimeFromMouseEvent(e)
                 addMarker(time)
-                setPlayheadPosition(time)
+                setPlayheadPosition(time, { snap: true })
               }}
               title="Double-click to add marker"
             >
@@ -5313,7 +5315,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                 {renderAssetDropPreviewClip(track)}
                 
                 {/* Roll edit zones and transition buttons/overlays between adjacent clips */}
-                {getAdjacentClips(track.id).map(({ clipA, clipB, transition, isOverlapping, gap }) => {
+                {getAdjacentClips(track.id).map(({ clipA, clipB, transition, isOverlapping, gap, isTrueEditPoint }) => {
                   const clipAEnd = clipA.startTime + clipA.duration
                   const canRollEdit = isTrimToolActive && (isOverlapping || Math.abs(gap) <= ROLL_EDIT_MAX_GAP_SECONDS)
                   
@@ -5444,7 +5446,10 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                     )
                   }
                   
-                  // Non-overlapping adjacent clips - show add transition button / drop target
+                  // Non-overlapping adjacent clips - show add transition button / drop target.
+                  // The transition affordance should only appear on a true butt cut,
+                  // not near misses or short gaps that are only useful for roll-edit hover zones.
+                  if (!isTrueEditPoint && !canRollEdit) return null
                   const editPointX = clipAEnd * pixelsPerSecond
                   const dropKey = `${clipA.id}-${clipB.id}`
                   const isDropTarget = transitionDropTarget === dropKey
@@ -5453,9 +5458,10 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                     <div
                       key={`edit-${clipA.id}-${clipB.id}`}
                       data-gap-ignore="true"
-                      className={`absolute top-0 bottom-0 z-20 group/edit ${isDropTarget ? 'bg-purple-500/10' : ''}`}
-                      style={{ left: `${editPointX - 6}px`, width: '12px' }}
+                      className={`absolute top-0 bottom-0 z-20 group/edit ${isDropTarget && isTrueEditPoint ? 'bg-purple-500/10' : ''}`}
+                      style={{ left: `${editPointX - 4}px`, width: '8px' }}
                       onDragOver={(e) => {
+                        if (!isTrueEditPoint) return
                         const payload = parseTransitionDrop(e)
                         if (!payload) return
                         e.preventDefault()
@@ -5464,11 +5470,13 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                         }
                       }}
                       onDragLeave={() => {
+                        if (!isTrueEditPoint) return
                         if (transitionDropTarget === dropKey) {
                           setTransitionDropTarget(null)
                         }
                       }}
                       onDrop={(e) => {
+                        if (!isTrueEditPoint) return
                         const payload = parseTransitionDrop(e)
                         if (!payload) return
                         e.preventDefault()
@@ -5525,15 +5533,17 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                       </div>
                       
                       {/* Add transition button */}
-                      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-auto">
-                        <button
-                          onClick={(e) => handleAddTransition(e, clipA, clipB)}
-                          className="w-5 h-5 rounded-full bg-sf-dark-600 border border-sf-dark-400 flex items-center justify-center hover:bg-purple-600 hover:border-purple-500 transition-colors opacity-0 group-hover/edit:opacity-100"
-                          title="Add transition"
-                        >
-                          <Plus className="w-3 h-3 text-white" />
-                        </button>
-                      </div>
+                      {isTrueEditPoint && (
+                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-auto">
+                          <button
+                            onClick={(e) => handleAddTransition(e, clipA, clipB)}
+                            className="w-3 h-3 rounded-full bg-sf-dark-700/90 border border-sf-dark-400/80 flex items-center justify-center hover:bg-purple-600 hover:border-purple-400 transition-colors opacity-0 group-hover/edit:opacity-100 shadow-[0_1px_4px_rgba(0,0,0,0.45)]"
+                            title="Add transition"
+                          >
+                            <Plus className="w-2 h-2 text-white" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )
                 })}
@@ -5911,7 +5921,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                   }}
                   onClick={(e) => {
                     e.stopPropagation()
-                    setPlayheadPosition(marker.time)
+                    setPlayheadPosition(marker.time, { snap: true })
                     selectMarker(marker.id)
                   }}
                   onContextMenu={(e) => {
@@ -6403,9 +6413,9 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                     const sign = parsed.seconds < 0 ? '-' : '+'
                     const frameCount = Math.round(Math.abs(parsed.seconds) * Math.max(1, Math.round(timecodeFps)))
                     if (moveOffsetMode === 'frames') {
-                      return `Parsed offset: ${sign}${frameCount} frames (${sign}${formatTimecodeWithFps(Math.abs(parsed.seconds), timecodeFps)})`
+                      return `Parsed offset: ${sign}${frameCount} frames (${sign}${formatFrameTimecode(Math.abs(parsed.seconds), timecodeFps)})`
                     }
-                    return `Parsed offset: ${sign}${formatTimecodeWithFps(Math.abs(parsed.seconds), timecodeFps)} (${sign}${frameCount} frames)`
+                    return `Parsed offset: ${sign}${formatFrameTimecode(Math.abs(parsed.seconds), timecodeFps)} (${sign}${frameCount} frames)`
                   })()}
                 </p>
               )}
@@ -6527,9 +6537,9 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                     const sign = parsed.seconds < 0 ? '-' : '+'
                     const frameCount = Math.round(Math.abs(parsed.seconds) * Math.max(1, Math.round(timecodeFps)))
                     if (durationDeltaMode === 'frames') {
-                      return `Parsed change: ${sign}${frameCount} frames (${sign}${formatTimecodeWithFps(Math.abs(parsed.seconds), timecodeFps)})`
+                      return `Parsed change: ${sign}${frameCount} frames (${sign}${formatFrameTimecode(Math.abs(parsed.seconds), timecodeFps)})`
                     }
-                    return `Parsed change: ${sign}${formatTimecodeWithFps(Math.abs(parsed.seconds), timecodeFps)} (${sign}${frameCount} frames)`
+                    return `Parsed change: ${sign}${formatFrameTimecode(Math.abs(parsed.seconds), timecodeFps)} (${sign}${frameCount} frames)`
                   })()}
                 </p>
               )}

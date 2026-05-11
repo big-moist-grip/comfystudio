@@ -27,6 +27,7 @@ export default function WorkflowDetail({
   const canPreviewAsset = previewAsset?.url && ['video', 'image', 'audio'].includes(previewAsset.type)
   const canCyclePreviewAssets = previewAssets.length > 1 && typeof actions?.onPreviewAssetIndexChange === 'function'
   const coverIsVideo = /\.(mp4|webm|mov)(\?|#|$)/i.test(String(workflow.cover || ''))
+  const coverPosition = workflow.coverPosition || 'center'
   const goToPreviewAsset = (nextIndex) => {
     if (!canCyclePreviewAssets) return
     const wrappedIndex = (nextIndex + previewAssets.length) % previewAssets.length
@@ -69,13 +70,14 @@ export default function WorkflowDetail({
               <video
                 src={workflow.cover}
                 className="h-full w-full object-cover"
+                style={{ objectPosition: coverPosition }}
                 autoPlay
                 muted
                 loop
                 playsInline
               />
             ) : workflow.cover ? (
-              <img src={workflow.cover} alt="" className="h-full w-full object-cover" />
+              <img src={workflow.cover} alt="" className="h-full w-full object-cover" style={{ objectPosition: coverPosition }} />
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-sf-text-muted">No preview</div>
             )}

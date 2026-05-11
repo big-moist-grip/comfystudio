@@ -1220,13 +1220,17 @@ export function modifyLTX23IA2VWorkflow(workflow, options = {}) {
   const numericFps = Math.max(1, Math.round(Number(fps) || 24))
   const numericSeed = Math.round(Number(seed) || Math.floor(Math.random() * 1000000000000))
 
-  if (modified['269']?.inputs && inputImage) {
-    modified['269'].inputs.image = inputImage
+  for (const imageNodeId of ['269', '345']) {
+    if (modified[imageNodeId]?.inputs && inputImage) {
+      modified[imageNodeId].inputs.image = inputImage
+    }
   }
 
-  if (modified['276']?.inputs && inputAudio) {
-    modified['276'].inputs.audio = inputAudio
-    delete modified['276'].inputs.audioUI
+  for (const audioNodeId of ['276', '346']) {
+    if (modified[audioNodeId]?.inputs && inputAudio) {
+      modified[audioNodeId].inputs.audio = inputAudio
+      delete modified[audioNodeId].inputs.audioUI
+    }
   }
 
   if (modified['340:319']?.inputs && 'value' in modified['340:319'].inputs) {
@@ -2617,6 +2621,84 @@ export function modifyMusicWorkflow(workflow, options = {}) {
   // Output prefix (node 107)
   if (modified['107']) {
     modified['107'].inputs.filename_prefix = 'audio/ComfyStudio'
+  }
+
+  return modified
+}
+
+function normalizeElevenLabsVoiceName(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return 'Roger (male, american)'
+  if (raw.includes('(') && raw.includes(')')) return raw
+
+  const voiceAliases = {
+    roger: 'Roger (male, american)',
+    laura: 'Laura (female, american)',
+    sarah: 'Sarah (female, american)',
+    charlie: 'Charlie (male, australian)',
+    george: 'George (male, british)',
+    callum: 'Callum (male, american)',
+    river: 'River (non-binary, american)',
+    liam: 'Liam (male, american)',
+    jessica: 'Jessica (female, american)',
+    eric: 'Eric (male, american)',
+  }
+
+  return voiceAliases[raw.toLowerCase()] || raw
+}
+
+/**
+ * Workflow modifier for ElevenLabs Text to Speech.
+ *
+ * Expected workflow:
+ *   - ElevenLabsTextToSpeech
+ *   - ElevenLabsVoiceSelector
+ *   - SaveAudioMP3
+ */
+export function modifyElevenLabsTextToSpeechWorkflow(workflow, options = {}) {
+  const {
+    text = '',
+    voice = 'Roger (male, american)',
+    stability = 0.5,
+    model = 'eleven_multilingual_v2',
+    speed = 1,
+    similarityBoost = 0.75,
+    useSpeakerBoost = false,
+    style = 0,
+    languageCode = '',
+    seed = 1,
+    outputFormat = 'mp3_44100_192',
+    filenamePrefix = 'audio/short_film_voice',
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const safeText = String(text || '').trim()
+  const safeVoice = normalizeElevenLabsVoiceName(voice)
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+
+    if (node.class_type === 'ElevenLabsTextToSpeech') {
+      if ('text' in node.inputs) node.inputs.text = safeText || node.inputs.text
+      if ('stability' in node.inputs) node.inputs.stability = Number(stability)
+      if ('apply_text_normalization' in node.inputs) node.inputs.apply_text_normalization = 'auto'
+      if ('model' in node.inputs) node.inputs.model = model || node.inputs.model
+      if ('model.speed' in node.inputs) node.inputs['model.speed'] = Number(speed)
+      if ('model.similarity_boost' in node.inputs) node.inputs['model.similarity_boost'] = Number(similarityBoost)
+      if ('model.use_speaker_boost' in node.inputs) node.inputs['model.use_speaker_boost'] = Boolean(useSpeakerBoost)
+      if ('model.style' in node.inputs) node.inputs['model.style'] = Number(style)
+      if ('language_code' in node.inputs) node.inputs.language_code = String(languageCode || '')
+      if ('seed' in node.inputs) node.inputs.seed = Math.max(0, Math.round(Number(seed) || 1))
+      if ('output_format' in node.inputs) node.inputs.output_format = outputFormat || node.inputs.output_format
+    }
+
+    if (node.class_type === 'ElevenLabsVoiceSelector' && 'voice' in node.inputs) {
+      node.inputs.voice = safeVoice
+    }
+
+    if (node.class_type === 'SaveAudioMP3' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'audio/short_film_voice'
+    }
   }
 
   return modified

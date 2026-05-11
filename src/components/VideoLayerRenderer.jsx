@@ -29,63 +29,9 @@ import {
   hasVignetteEffect,
 } from '../utils/effects'
 import { canUseGlslEffects, hasGlslEffect, snapshotAdjustmentGlslEffectsForOverlay } from '../utils/glslEffects'
+import { cullVisualLayerEntries } from '../utils/layerCompositing'
 import ClipEffectSvgFilter from './effects/ClipEffectSvgFilter'
 import GlslEffectCanvas from './effects/GlslEffectCanvas'
-
-/**
- * Returns true if this layer fully obscures all layers below it (opaque, normal blend, covers frame).
- * When true, we can skip decoding/rendering all layers underneath for performance.
- */
-function isLayerFullyObscuring(clip, playheadPosition, getAssetById) {
-  if (!clip) return false
-  // Images may contain transparency (PNG overlays like letterbox/vignette),
-  // so they cannot be safely treated as fully occluding.
-  if (clip.type !== 'video') return false
-  const asset = clip.assetId && typeof getAssetById === 'function'
-    ? getAssetById(clip.assetId)
-    : null
-  // Alpha overlays must not cull lower layers.
-  if (asset?.settings?.hasAlpha === true) {
-    return false
-  }
-  // A clip with an enabled mask effect punches transparency into itself via
-  // MaskedVideoCanvas, so layers below it must keep rendering. Without this
-  // guard the culler thinks an untransformed, full-opacity masked clip fully
-  // covers the frame and drops the background layer -- the hole the mask
-  // carves out then shows nothing (black preview backdrop) instead of the
-  // layer the user composed underneath.
-  if (Array.isArray(clip.effects) && clip.effects.some(e => e?.type === 'mask' && e?.enabled)) {
-    return false
-  }
-  // Camera shake or vignette mean the clip no longer fully covers the frame.
-  if (Array.isArray(clip.effects) && clip.effects.some(e => (
-    e?.enabled !== false && (e?.type === 'cameraShake' || e?.type === 'vignette')
-  ))) {
-    return false
-  }
-  const clipTime = playheadPosition - (clip.startTime || 0)
-  const t = getAnimatedTransform(clip, clipTime)
-  if (!t) return false
-  const opacity = Number(t.opacity)
-  const blendMode = t.blendMode || 'normal'
-  const positionX = Number(t.positionX) || 0
-  const positionY = Number(t.positionY) || 0
-  const scaleX = Number(t.scaleX)
-  const scaleY = Number(t.scaleY)
-  const rotation = Number(t.rotation)
-  const cropTop = Number(t.cropTop) || 0
-  const cropBottom = Number(t.cropBottom) || 0
-  const cropLeft = Number(t.cropLeft) || 0
-  const cropRight = Number(t.cropRight) || 0
-  if (opacity < 99.5 || blendMode !== 'normal') return false
-  // Any translation means the clip no longer reliably covers the full frame,
-  // so lower layers may become visible and must keep rendering.
-  if (positionX !== 0 || positionY !== 0) return false
-  if (scaleX < 100 || scaleY < 100) return false
-  if (rotation !== 0) return false
-  if (cropTop > 0 || cropBottom > 0 || cropLeft > 0 || cropRight > 0) return false
-  return true
-}
 
 function sanitizeAdjustmentFilterId(value) {
   return String(value || 'adjustment-filter').replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -2542,7 +2488,8 @@ function VideoLayerRenderer({
   } = useTimelineStore()
 
   const getAssetById = useAssetsStore(state => state.getAssetById)
-  const { currentProjectHandle } = useProjectStore()
+  const currentProjectHandle = useProjectStore(state => state.currentProjectHandle)
+  const timelineSettings = useProjectStore(state => state.getCurrentTimelineSettings?.())
   // Subscribe to the proxy-preference toggle so preload/pre-seek effects
   // re-run when the user flips it, which refreshes the video-cache URLs
   // keyed to `resolvePlaybackUrl`. Included in dep arrays below.
@@ -2876,33 +2823,28 @@ function VideoLayerRenderer({
     return styleMap
   }, [allMediaClips, transitionInfo, getTransitionStyles])
   
-  // Occlusion culling: if a layer is fully opaque and covers the frame, nothing below is visible.
-  // IMPORTANT: allMediaClips is ordered bottom -> top for rendering, so culling must scan top -> bottom.
-  // IMPORTANT: never cull transition participants, or transitions become "fade to black + hard cut."
-  const mediaClips = (() => {
-    const visible = []
-    for (let i = allMediaClips.length - 1; i >= 0; i -= 1) {
-      const entry = allMediaClips[i]
-      // Preserve render order (bottom -> top) while scanning from top.
-      visible.unshift(entry)
-      const inTransition = transitionStyleByClipId.has(entry.clip.id)
-      if (!inTransition && isLayerFullyObscuring(entry.clip, playheadPosition, getAssetById)) break
-    }
-    return visible
-  })()
-  const visibleMediaClipIds = useMemo(
-    () => new Set(mediaClips.map(({ clip }) => clip.id)),
-    [mediaClips]
+  // Per-clip lower-layer compositing. Active clips are ordered bottom -> top,
+  // so the shared culler scans from the top and drops anything underneath a
+  // clip that either fully covers the frame in Auto mode or has compositing
+  // forced Off in the Inspector.
+  const transitionClipIds = useMemo(
+    () => new Set(transitionStyleByClipId.keys()),
+    [transitionStyleByClipId]
   )
-  const compositedVisualClips = useMemo(
-    () => activeLayerClips.filter(({ clip }) => {
-      if (clip.type === 'adjustment') return true
-      if (clip.type === 'text') return true
-      if (clip.type === 'video' || clip.type === 'image') return visibleMediaClipIds.has(clip.id)
-      return false
-    }),
-    [activeLayerClips, visibleMediaClipIds]
-  )
+  const compositedVisualClips = useMemo(() => cullVisualLayerEntries(activeLayerClips, {
+    time: playheadPosition,
+    getAssetById,
+    transitionClipIds,
+    timelineWidth: timelineSettings?.width || 1920,
+    timelineHeight: timelineSettings?.height || 1080,
+  }), [
+    activeLayerClips,
+    getAssetById,
+    playheadPosition,
+    timelineSettings?.height,
+    timelineSettings?.width,
+    transitionClipIds,
+  ])
 
   // Push adjustment-layer GLSL effects down onto each underlying media clip
   // for the preview pipeline. The export path runs these on the composited

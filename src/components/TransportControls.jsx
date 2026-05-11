@@ -5,6 +5,7 @@ import useTimelineStore from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
 import TimelineSwitcher from './TimelineSwitcher'
 import { isTextEditingElement } from '../utils/keyboardFocus'
+import { formatTimecode, getSafeTimelineFps, stepTimeByFrames } from '../utils/timelineFrames'
 
 // Playback mode options
 const PLAYBACK_MODES = [
@@ -116,17 +117,7 @@ function TransportControls() {
 
   // Frame rate for frame stepping - use actual timeline FPS
   const timelineSettings = getCurrentTimelineSettings()
-  const fps = timelineSettings?.fps || 24
-  const frameStep = 1 / fps
-
-  // Format time as HH:MM:SS:FF (hours:minutes:seconds:frames)
-  const formatTimecode = (seconds) => {
-    const hours = Math.floor(seconds / 3600)
-    const mins = Math.floor((seconds % 3600) / 60)
-    const secs = Math.floor(seconds % 60)
-    const frames = Math.floor((seconds % 1) * fps)
-    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}:${frames.toString().padStart(2, '0')}`
-  }
+  const fps = getSafeTimelineFps(timelineSettings?.fps, 24)
   
   // Unified controls
   const togglePlay = () => {
@@ -140,7 +131,7 @@ function TransportControls() {
   
   const seekTo = (time) => {
     if (timelineMode) {
-      setPlayheadPosition(Math.max(0, Math.min(duration, time)))
+      setPlayheadPosition(Math.max(0, Math.min(duration, time)), { snap: true })
     } else {
       assetSeekTo(time)
     }
@@ -151,11 +142,11 @@ function TransportControls() {
   const goToEnd = () => seekTo(duration)
   
   const frameBack = () => {
-    seekTo(Math.max(0, currentTime - frameStep))
+    seekTo(stepTimeByFrames(currentTime, -1, fps, { min: 0, max: duration }))
   }
   
   const frameForward = () => {
-    seekTo(Math.min(duration, currentTime + frameStep))
+    seekTo(stepTimeByFrames(currentTime, 1, fps, { min: 0, max: duration }))
   }
   
   const previousClip = () => {
@@ -383,7 +374,7 @@ function TransportControls() {
                 ? 'bg-[#5a7a9e]/20 text-[#7a9ab8] hover:bg-[#5a7a9e]/30' 
                 : 'hover:bg-sf-dark-700 text-sf-text-muted'
             }`}
-            title={inPoint !== null ? `In: ${formatTimecode(inPoint)} (I to set, click to go)` : 'Set In Point (I)'}
+            title={inPoint !== null ? `In: ${formatTimecode(inPoint, fps)} (I to set, click to go)` : 'Set In Point (I)'}
           >
             <ArrowLeftToLine className="w-3.5 h-3.5" />
           </button>
@@ -395,7 +386,7 @@ function TransportControls() {
                 ? 'bg-[#5a7a9e]/20 text-[#7a9ab8] hover:bg-[#5a7a9e]/30' 
                 : 'hover:bg-sf-dark-700 text-sf-text-muted'
             }`}
-            title={outPoint !== null ? `Out: ${formatTimecode(outPoint)} (O to set, click to go)` : 'Set Out Point (O)'}
+            title={outPoint !== null ? `Out: ${formatTimecode(outPoint, fps)} (O to set, click to go)` : 'Set Out Point (O)'}
           >
             <ArrowRightToLine className="w-3.5 h-3.5" />
           </button>
@@ -573,11 +564,11 @@ function TransportControls() {
         
         {/* Timecode Display */}
         <div className="ml-3 px-2 py-0.5 bg-sf-dark-950 rounded font-mono text-xs text-sf-text-primary">
-          {formatTimecode(currentTime)}
+          {formatTimecode(currentTime, fps)}
         </div>
         <span className="text-sf-text-muted text-xs mx-1">/</span>
         <div className="px-2 py-0.5 bg-sf-dark-950/50 rounded font-mono text-xs text-sf-text-muted">
-          {formatTimecode(duration)}
+          {formatTimecode(duration, fps)}
         </div>
       </div>
       

@@ -27,17 +27,20 @@ export default function WorkflowBrowser({
   workflows = [],
   selectedWorkflowId = '',
   route = GENERATE_WORKFLOW_ROUTES.local,
+  variant = 'default',
   onRouteChange,
   onSelectWorkflow,
 }) {
   const [query, setQuery] = useState('')
   const [filterId, setFilterId] = useState('all')
+  const isCreateLauncher = variant === 'create-launcher'
 
-  const normalizedQuery = query.trim().toLowerCase()
+  const normalizedQuery = isCreateLauncher ? '' : query.trim().toLowerCase()
+  const activeFilterId = isCreateLauncher ? 'all' : filterId
 
   const filteredWorkflows = useMemo(() => (
-    workflows.filter((workflow) => matchesWorkflow(workflow, normalizedQuery, filterId))
-  ), [filterId, normalizedQuery, workflows])
+    workflows.filter((workflow) => matchesWorkflow(workflow, normalizedQuery, activeFilterId))
+  ), [activeFilterId, normalizedQuery, workflows])
 
   const groupedWorkflows = useMemo(() => {
     const groups = new Map()
@@ -51,57 +54,63 @@ export default function WorkflowBrowser({
 
   return (
     <div className="rounded-2xl border border-sf-dark-700 bg-sf-dark-900/80 p-3 shadow-lg shadow-black/10">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="flex items-center gap-1 rounded-lg border border-sf-dark-700 bg-sf-dark-800 p-1">
-          {Object.values(GENERATE_WORKFLOW_ROUTES).map((routeId) => (
+      {!isCreateLauncher && (
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-1 rounded-lg border border-sf-dark-700 bg-sf-dark-800 p-1">
+            {Object.values(GENERATE_WORKFLOW_ROUTES).map((routeId) => (
+              <button
+                key={routeId}
+                type="button"
+                onClick={() => onRouteChange?.(routeId)}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  route === routeId
+                    ? 'bg-sf-accent text-white'
+                    : 'text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary'
+                }`}
+              >
+                {routeId === 'cloud' ? 'Cloud' : 'Local'}
+              </button>
+            ))}
+          </div>
+          <div className="relative min-w-0 flex-1 md:max-w-md">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-sf-text-muted" />
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search workflows, providers, tags..."
+              className="w-full rounded-lg border border-sf-dark-700 bg-sf-dark-800 py-2 pl-9 pr-3 text-xs text-sf-text-primary outline-none transition-colors placeholder:text-sf-text-muted focus:border-sf-accent"
+            />
+          </div>
+        </div>
+      )}
+
+      {!isCreateLauncher && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {GENERATE_WORKFLOW_FILTERS.map((filter) => (
             <button
-              key={routeId}
+              key={filter.id}
               type="button"
-              onClick={() => onRouteChange?.(routeId)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                route === routeId
-                  ? 'bg-sf-accent text-white'
-                  : 'text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary'
+              onClick={() => setFilterId(filter.id)}
+              className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+                filterId === filter.id
+                  ? 'border-sf-accent/60 bg-sf-accent/15 text-sf-accent'
+                  : 'border-sf-dark-700 bg-sf-dark-800 text-sf-text-muted hover:border-sf-dark-500 hover:text-sf-text-primary'
               }`}
             >
-              {routeId === 'cloud' ? 'Cloud' : 'Local'}
+              {filter.label}
             </button>
           ))}
         </div>
-        <div className="relative min-w-0 flex-1 md:max-w-md">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-sf-text-muted" />
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search workflows, providers, tags..."
-            className="w-full rounded-lg border border-sf-dark-700 bg-sf-dark-800 py-2 pl-9 pr-3 text-xs text-sf-text-primary outline-none transition-colors placeholder:text-sf-text-muted focus:border-sf-accent"
-          />
-        </div>
-      </div>
+      )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-1.5">
-        {GENERATE_WORKFLOW_FILTERS.map((filter) => (
-          <button
-            key={filter.id}
-            type="button"
-            onClick={() => setFilterId(filter.id)}
-            className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
-              filterId === filter.id
-                ? 'border-sf-accent/60 bg-sf-accent/15 text-sf-accent'
-                : 'border-sf-dark-700 bg-sf-dark-800 text-sf-text-muted hover:border-sf-dark-500 hover:text-sf-text-primary'
-            }`}
-          >
-            {filter.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-sf-text-muted">
+      <div className={`${isCreateLauncher ? 'mt-0' : 'mt-3'} flex items-center justify-between gap-2 text-[11px] text-sf-text-muted`}>
         <span>
-          Showing {filteredWorkflows.length} {route === 'cloud' ? 'cloud' : 'local'} workflow{filteredWorkflows.length === 1 ? '' : 's'}
+          {isCreateLauncher
+            ? 'Choose a creator workflow'
+            : `Showing ${filteredWorkflows.length} ${route === 'cloud' ? 'cloud' : 'local'} workflow${filteredWorkflows.length === 1 ? '' : 's'}`}
         </span>
-        {filterId !== 'all' && <span>{GENERATE_WORKFLOW_CATEGORY_LABELS[filterId]}</span>}
+        {!isCreateLauncher && filterId !== 'all' && <span>{GENERATE_WORKFLOW_CATEGORY_LABELS[filterId]}</span>}
       </div>
 
       <div className="mt-3 space-y-5">
@@ -121,6 +130,7 @@ export default function WorkflowBrowser({
                   workflow={workflow}
                   selected={selectedWorkflowId === workflow.id || selectedWorkflowId === workflow.workflowId}
                   onSelect={onSelectWorkflow}
+                  showRouteBadge={!isCreateLauncher}
                 />
               ))}
             </div>

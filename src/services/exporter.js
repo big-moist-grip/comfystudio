@@ -25,6 +25,7 @@ import {
   hasVignetteEffect,
 } from '../utils/effects'
 import { applyGlslEffectsToCanvas, hasGlslEffect } from '../utils/glslEffects'
+import { cullVisualLayerEntries, getTransitionClipIds } from '../utils/layerCompositing'
 
 const DEFAULT_SAMPLE_RATE = 44100
 const AUDIO_FETCH_TIMEOUT_MS = 15000
@@ -550,7 +551,7 @@ const hasManagedPixelOrVignetteEffect = (clip, clipTime) => {
  * ImageData. Vignette is composited with `source-atop` so it only darkens
  * the clip's rendered pixels, keeping surrounding transparent areas clean.
  */
-const applyClipManagedEffectsToOffCanvas = (offCanvas, offCtx, width, height, clip, clipTime, frameIndex) => {
+const applyClipManagedEffectsToOffCanvas = (offCanvas, offCtx, width, height, clip, clipTime, frameIndex, glslQualityScale = 1) => {
   if (!clip) return
   const effects = clip.effects || []
   // Channel shifts, sharpening, grain, and analog damage are ImageData passes.
@@ -576,7 +577,7 @@ const applyClipManagedEffectsToOffCanvas = (offCanvas, offCtx, width, height, cl
     applyGlowPassesToCanvas(offCanvas, offCtx, width, height, effects, clipTime)
   }
   if (hasGlslEffect(effects)) {
-    applyGlslEffectsToCanvas(offCanvas, offCtx, width, height, effects, clipTime)
+    applyGlslEffectsToCanvas(offCanvas, offCtx, width, height, effects, clipTime, glslQualityScale)
   }
   const vignetteEffect = getActiveVignetteEffect(effects, clipTime)
   if (vignetteEffect) {
@@ -777,7 +778,14 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     useProxyMedia = false,
     fastSeek = true,
     useDirectFramePipe = true,
+    glslQualityScale = 1,
+    signal = null,
   } = options
+  const throwIfCancelled = () => {
+    if (signal?.aborted) {
+      throw new Error('Export cancelled')
+    }
+  }
   
   const totalDuration = Math.max(0, rangeEnd - rangeStart)
   const totalFrames = Math.ceil(totalDuration * fps)
@@ -996,7 +1004,9 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
 
   try {
   for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
+    throwIfCancelled()
     await yieldToMain()
+    throwIfCancelled()
     const targetTime = rangeStart + frameIndex * frameDuration + halfFrame
     const safeEnd = Math.max(rangeStart, rangeEnd - halfFrame)
     const time = Math.min(targetTime, safeEnd)
@@ -1006,13 +1016,20 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     ctx.fillRect(0, 0, width, height)
     
     const activeClips = timelineState.getActiveClipsAtTime(time)
-    const visualLayerClips = activeClips
+    const rawVisualLayerClips = activeClips
       .filter(({ track }) => track.type === 'video')
       .sort((a, b) => {
         const indexA = timelineState.tracks.findIndex(t => t.id === a.track.id)
         const indexB = timelineState.tracks.findIndex(t => t.id === b.track.id)
         return indexB - indexA
       })
+    const visualLayerClips = cullVisualLayerEntries(rawVisualLayerClips, {
+      time,
+      getAssetById: assetsState.getAssetById,
+      transitionClipIds: getTransitionClipIds(transitionInfo),
+      timelineWidth: width,
+      timelineHeight: height,
+    })
     
     for (const { clip } of visualLayerClips) {
       if (clip.type === 'adjustment') {
@@ -1065,7 +1082,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
               managedCtx = managedCanvas.getContext('2d')
               managedCtx.drawImage(adjustmentOutputCanvas, 0, 0)
             }
-            applyClipManagedEffectsToOffCanvas(managedCanvas, managedCtx, width, height, clip, clipTime, frameIndex)
+            applyClipManagedEffectsToOffCanvas(managedCanvas, managedCtx, width, height, clip, clipTime, frameIndex, glslQualityScale)
             adjustmentOutputCanvas = managedCanvas
           }
 
@@ -1139,7 +1156,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
 
           if (usesManagedPixelEffects) {
             const outCtx = processedCanvasForText.getContext('2d')
-            applyClipManagedEffectsToOffCanvas(processedCanvasForText, outCtx, width, height, clip, clipTime, frameIndex)
+            applyClipManagedEffectsToOffCanvas(processedCanvasForText, outCtx, width, height, clip, clipTime, frameIndex, glslQualityScale)
           }
 
           ctx.save()
@@ -1174,7 +1191,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
           drawText(offCtx, rect, clip, textStyleScale)
           offCtx.restore()
 
-          applyClipManagedEffectsToOffCanvas(offCanvas, offCtx, width, height, clip, clipTime, frameIndex)
+          applyClipManagedEffectsToOffCanvas(offCanvas, offCtx, width, height, clip, clipTime, frameIndex, glslQualityScale)
 
           ctx.save()
           ctx.globalAlpha = clipOpacity
@@ -1370,7 +1387,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
 
         if (usesManagedPixelEffects) {
           const outCtx = advancedOutputCanvas.getContext('2d')
-          applyClipManagedEffectsToOffCanvas(advancedOutputCanvas, outCtx, width, height, clip, clipTime, frameIndex)
+          applyClipManagedEffectsToOffCanvas(advancedOutputCanvas, outCtx, width, height, clip, clipTime, frameIndex, glslQualityScale)
         }
 
         ctx.save()
@@ -1433,7 +1450,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         }
         offCtx.restore()
 
-        applyClipManagedEffectsToOffCanvas(offCanvas, offCtx, width, height, clip, clipTime, frameIndex)
+        applyClipManagedEffectsToOffCanvas(offCanvas, offCtx, width, height, clip, clipTime, frameIndex, glslQualityScale)
 
         ctx.save()
         ctx.globalAlpha = clipOpacity
@@ -1544,7 +1561,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
           offCtx.putImageData(frameData, 0, 0)
 
           if (usesManagedPixelEffects) {
-            applyClipManagedEffectsToOffCanvas(offCanvas, offCtx, width, height, clip, clipTime, frameIndex)
+            applyClipManagedEffectsToOffCanvas(offCanvas, offCtx, width, height, clip, clipTime, frameIndex, glslQualityScale)
           }
 
           ctx.drawImage(offCanvas, 0, 0)
@@ -1610,6 +1627,15 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   }
 
   if (framePipeSessionId) {
+    if (signal?.aborted) {
+      try {
+        await window.electronAPI.abortFramePipe(framePipeSessionId)
+      } catch {
+        // ignore abort errors
+      }
+      framePipeSessionId = null
+      throw new Error('Export cancelled')
+    }
     onProgress({ status: 'Finalizing fast FFmpeg pipe...', progress: 78 })
     const pipeFinish = await window.electronAPI.finishFramePipe(framePipeSessionId)
     framePipeSessionId = null

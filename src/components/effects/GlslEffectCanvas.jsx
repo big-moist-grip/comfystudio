@@ -1,12 +1,6 @@
 import { memo, useCallback, useEffect, useRef } from 'react'
-import { createGlslEffectRenderer } from '../../utils/glslEffects'
+import { createGlslEffectRenderer, getGlslPreviewQualityScale } from '../../utils/glslEffects'
 import useTimelineStore from '../../stores/timelineStore'
-
-const GLSL_PREVIEW_QUALITY_SCALE = {
-  full: 1,
-  half: 0.5,
-  quarter: 0.25,
-}
 
 function getSourceDimensions(source) {
   return {
@@ -28,7 +22,7 @@ const GlslEffectCanvas = memo(function GlslEffectCanvas({
   const rendererRef = useRef(null)
   const imageRef = useRef(null)
   const glslPreviewQuality = useTimelineStore(state => state.glslPreviewQuality)
-  const qualityScale = GLSL_PREVIEW_QUALITY_SCALE[glslPreviewQuality] || 1
+  const qualityScale = getGlslPreviewQualityScale(glslPreviewQuality)
   const latestRef = useRef({ effects, clipTime, qualityScale })
   const renderedRef = useRef(false)
 

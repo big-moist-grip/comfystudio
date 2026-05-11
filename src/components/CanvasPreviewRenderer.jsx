@@ -24,7 +24,8 @@ import {
   hasPixelFilterEffect,
   hasVignetteEffect,
 } from '../utils/effects'
-import { applyGlslEffectsToCanvas, canUseGlslEffects, hasGlslEffect } from '../utils/glslEffects'
+import { applyGlslEffectsToCanvas, canUseGlslEffects, getGlslPreviewQualityScale, hasGlslEffect } from '../utils/glslEffects'
+import { cullVisualLayerEntries, getTransitionClipIds } from '../utils/layerCompositing'
 import {
   applyClipCrop,
   applyClipTransform,
@@ -218,7 +219,7 @@ function hasManagedCanvasEffect(clip, clipTime) {
     || hasLetterboxEffect(effects, clipTime)
 }
 
-function applyManagedCanvasEffects(canvas, ctx, width, height, clip, clipTime, frameIndex) {
+function applyManagedCanvasEffects(canvas, ctx, width, height, clip, clipTime, frameIndex, glslQualityScale = 1) {
   if (!clip) return
   const effects = clip.effects || []
   const hasImageDataEffects = effects.some((e) => (
@@ -241,7 +242,7 @@ function applyManagedCanvasEffects(canvas, ctx, width, height, clip, clipTime, f
   }
   applyBlurPassesToCanvas(canvas, ctx, width, height, effects, clipTime)
   if (canUseGlslEffects() && hasGlslEffect(effects)) {
-    applyGlslEffectsToCanvas(canvas, ctx, width, height, effects, clipTime)
+    applyGlslEffectsToCanvas(canvas, ctx, width, height, effects, clipTime, glslQualityScale)
   }
   const vignetteEffect = getActiveVignetteEffect(effects, clipTime)
   if (vignetteEffect) {
@@ -353,6 +354,7 @@ function CanvasPreviewRenderer({
     playheadPosition,
     playbackRate,
     useProxyPlaybackForAssets,
+    glslPreviewQuality,
   } = useTimelineStore()
   const assets = useAssetsStore(state => state.assets)
 
@@ -439,6 +441,7 @@ function CanvasPreviewRenderer({
     playheadPosition,
     playbackRate,
     useProxyPlaybackForAssets,
+    glslPreviewQuality,
     width: safeWidth,
     height: safeHeight,
     fps: safeFps,
@@ -512,6 +515,7 @@ function CanvasPreviewRenderer({
     const adjustmentFilter = buildCssFilterFromAdjustments(adjustmentSettings)
     const clipAdjustmentFilterValue = adjustmentFilter !== 'none' ? adjustmentFilter : null
     const usesManagedEffects = hasManagedCanvasEffect(clip, clipTime)
+    const glslQualityScale = getGlslPreviewQualityScale(state.glslPreviewQuality)
 
     const buffers = buffersRef.current
     if (!buffers.offCanvas) {
@@ -639,7 +643,7 @@ function CanvasPreviewRenderer({
     }
     if (usesManagedEffects) {
       const outputCtx = outputCanvas.getContext('2d', { willReadFrequently: true })
-      applyManagedCanvasEffects(outputCanvas, outputCtx, width, height, clip, clipTime, frameIndex)
+      applyManagedCanvasEffects(outputCanvas, outputCtx, width, height, clip, clipTime, frameIndex, glslQualityScale)
     }
 
     ctx.save()
@@ -661,6 +665,7 @@ function CanvasPreviewRenderer({
     const clipTransform = applyEffectsToTransform(baseTransform, clip.effects, clipTime)
     const usesManagedEffects = hasManagedCanvasEffect(clip, clipTime)
     const adjustmentIsActive = hasAdjustmentEffect(adjustmentSettings)
+    const glslQualityScale = getGlslPreviewQualityScale(state.glslPreviewQuality)
     if (!adjustmentIsActive && !usesManagedEffects) return
 
     const buffers = buffersRef.current
@@ -690,7 +695,7 @@ function CanvasPreviewRenderer({
 
     if (usesManagedEffects) {
       const outputCtx = outputCanvas.getContext('2d', { willReadFrequently: true })
-      applyManagedCanvasEffects(outputCanvas, outputCtx, width, height, clip, clipTime, frameIndex)
+      applyManagedCanvasEffects(outputCanvas, outputCtx, width, height, clip, clipTime, frameIndex, glslQualityScale)
     }
 
     const rect = getBaseDrawRect(width, height, width, height)
@@ -753,7 +758,14 @@ function CanvasPreviewRenderer({
     state.isScrubbingPreview = isScrubbingPreview
     const transitionInfo = state.getTransitionAtTime(time)
     const frameIndex = Math.floor(time * fps)
-    const visualClips = getVisualLayerClips(state, time)
+    const getAssetById = useAssetsStore.getState().getAssetById
+    const visualClips = cullVisualLayerEntries(getVisualLayerClips(state, time), {
+      time,
+      getAssetById,
+      transitionClipIds: getTransitionClipIds(transitionInfo),
+      timelineWidth: width,
+      timelineHeight: height,
+    })
 
     preloadVideosAroundTime(state, time)
 
@@ -761,7 +773,6 @@ function CanvasPreviewRenderer({
       || visualClips.some(({ clip }) => clip?.type === 'video' && isSeekDrivenPlayback(state, clip))
 
     if (shouldGateVideoReadiness) {
-      const getAssetById = useAssetsStore.getState().getAssetById
       for (const { clip } of visualClips) {
         if (!clip || clip.type !== 'video') continue
         const seekDriven = isSeekDrivenPlayback(state, clip)
@@ -929,6 +940,7 @@ function CanvasPreviewRenderer({
     tracks,
     transitions,
     useProxyPlaybackForAssets,
+    glslPreviewQuality,
   ])
 
   const activeSelectableClip = useMemo(() => {

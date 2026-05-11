@@ -1,5 +1,9 @@
 import { TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID } from './topazVideoUpscaleConfig'
 import { MUSIC_VIDEO_SHOT_WORKFLOW_ID, VOCAL_EXTRACT_WORKFLOW_ID } from './musicVideoShotConfig'
+import {
+  ELEVENLABS_TTS_WORKFLOW_ID,
+  SHORT_FILM_DIALOGUE_VIDEO_WORKFLOW_ID,
+} from './shortFilmConfig'
 
 export const SHOT_CATEGORIES = {
   Shot: ['Extreme close-up', 'Close-up', 'Medium close-up', 'Medium shot', 'Medium wide', 'Wide shot', 'Extreme wide', 'Over-the-shoulder', 'POV', 'Two-shot', 'Insert shot'],
@@ -108,6 +112,21 @@ export const YOLO_MUSIC_PROFILES = Object.freeze({
     videoWorkflowId: MUSIC_VIDEO_SHOT_WORKFLOW_ID,
   }),
 })
+
+export const YOLO_MUSIC_KEYFRAME_WORKFLOW_OPTIONS = Object.freeze([
+  {
+    id: 'image-edit',
+    label: 'Qwen Image Edit',
+    runtimeLabel: 'Local',
+    description: 'Fully local keyframes using Qwen Image Edit 2509. Uses the resolved cast/reference image as the edit source.',
+  },
+  {
+    id: 'nano-banana-2',
+    label: 'Nano Banana 2',
+    runtimeLabel: 'Cloud',
+    description: 'Cloud keyframes with stronger reference-image and identity consistency.',
+  },
+])
 
 export const YOLO_MUSIC_VIDEO_WORKFLOW_OPTIONS = Object.freeze([
   {
@@ -283,11 +302,15 @@ export const YOLO_VIDEO_WORKFLOW_TARGET_OPTIONS = Object.freeze([
 ])
 
 const WORKFLOW_DISPLAY_LABELS = Object.freeze({
+  'z-image-turbo': 'Z-Image Turbo',
+  'image-edit': 'Qwen Image Edit 2509',
+  'nano-banana-2': 'Nano Banana 2',
   'wan22-i2v': 'WAN 2.2',
   'wan22-t2v': 'WAN 2.2 Text to Video',
   'ltx23-i2v': 'LTX 2.3',
   'ltx23-ia2v': 'LTX 2.3 IA2V',
   'ltx23-t2v': 'LTX 2.3 Text to Video',
+  [SHORT_FILM_DIALOGUE_VIDEO_WORKFLOW_ID]: 'Short Film Dialogue (LTX 2.3)',
   'frame-interpolation': 'Frame Interpolation',
   'kling-o3-i2v': 'Kling O3 Omni',
   'grok-video-i2v': 'Grok Imagine Video',
@@ -298,6 +321,7 @@ const WORKFLOW_DISPLAY_LABELS = Object.freeze({
   [TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID]: 'Topaz Video Upscale',
   [MUSIC_VIDEO_SHOT_WORKFLOW_ID]: 'Music Video Shot (LTX 2.3 + Audio)',
   [VOCAL_EXTRACT_WORKFLOW_ID]: 'Vocal Extract (Mel-Band)',
+  [ELEVENLABS_TTS_WORKFLOW_ID]: 'ElevenLabs Text to Speech',
   'caption-qwen-asr': 'Caption Transcription (Qwen ASR)',
   'grok-text-to-image': 'Grok Imagine',
   'gpt-image-2-t2i': 'GPT Image 2',
@@ -439,6 +463,12 @@ const WORKFLOW_HARDWARE = Object.freeze({
     minimumVramGb: 24,
     recommendedVramGb: 32,
   },
+  [SHORT_FILM_DIALOGUE_VIDEO_WORKFLOW_ID]: {
+    tierId: 'pro',
+    runtime: 'local',
+    minimumVramGb: 24,
+    recommendedVramGb: 32,
+  },
   'nano-banana-2': {
     tierId: 'cloud',
     runtime: 'cloud',
@@ -494,6 +524,10 @@ const WORKFLOW_HARDWARE = Object.freeze({
     runtime: 'local',
     minimumVramGb: 6,
     recommendedVramGb: 8,
+  },
+  [ELEVENLABS_TTS_WORKFLOW_ID]: {
+    tierId: 'cloud',
+    runtime: 'cloud',
   },
   'seedream-5-lite-image-edit': {
     tierId: 'cloud',

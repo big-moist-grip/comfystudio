@@ -5,6 +5,10 @@
 
 import { TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID } from './topazVideoUpscaleConfig'
 import { MUSIC_VIDEO_SHOT_WORKFLOW_ID, VOCAL_EXTRACT_WORKFLOW_ID } from './musicVideoShotConfig'
+import {
+  ELEVENLABS_TTS_WORKFLOW_ID,
+  SHORT_FILM_DIALOGUE_VIDEO_WORKFLOW_ID,
+} from './shortFilmConfig'
 
 const COMFY_REGISTRY_URL = 'https://registry.comfy.org'
 const NANO_BANANA_2_FALLBACK_ESTIMATED_CREDITS = Object.freeze({
@@ -688,6 +692,19 @@ export const WORKFLOW_DEPENDENCY_PACKS = Object.freeze({
     docsUrl: COMFY_REGISTRY_URL,
   }),
 
+  [ELEVENLABS_TTS_WORKFLOW_ID]: Object.freeze({
+    id: ELEVENLABS_TTS_WORKFLOW_ID,
+    displayName: 'ElevenLabs Text to Speech',
+    requiredNodes: Object.freeze([
+      { classType: 'ElevenLabsTextToSpeech' },
+      { classType: 'ElevenLabsVoiceSelector' },
+      { classType: 'SaveAudioMP3' },
+    ]),
+    requiredModels: Object.freeze([]),
+    requiresComfyOrgApiKey: true,
+    docsUrl: COMFY_REGISTRY_URL,
+  }),
+
   'z-image-turbo': Object.freeze({
     id: 'z-image-turbo',
     displayName: 'Z Image Turbo',
@@ -1039,6 +1056,8 @@ export function getWorkflowDependencyPack(workflowId) {
   const canonicalId = (
     normalized === 'nano-banana-pro'
       ? 'nano-banana-2'
+      : normalized === SHORT_FILM_DIALOGUE_VIDEO_WORKFLOW_ID
+        ? 'ltx23-ia2v'
       : normalized
   )
   return WORKFLOW_DEPENDENCY_PACKS[canonicalId] || null

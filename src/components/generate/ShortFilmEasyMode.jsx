@@ -14,6 +14,14 @@ import {
   Volume2,
   Wand2,
 } from 'lucide-react'
+import {
+  buildShortFilmVideoPrompt,
+  buildShortFilmDialogueMotionPrompt,
+  ELEVENLABS_TTS_WORKFLOW_ID,
+  SHORT_FILM_DIALOGUE_MOUTH_GUIDANCE,
+  SHORT_FILM_KEYFRAME_WORKFLOW_OPTIONS,
+  SHORT_FILM_VIDEO_RESOLUTION_OPTIONS,
+} from '../../config/shortFilmConfig'
 
 const DRAFT_STORAGE_KEY = 'comfystudio-short-film-easy-mode-draft-v1'
 
@@ -35,10 +43,7 @@ const ASPECT_RATIO_OPTIONS = [
   { id: 'square_1x1', label: '1:1', helper: 'Square social frame.' },
 ]
 
-const RESOLUTION_OPTIONS = [
-  { id: '720p', label: '720p' },
-  { id: '1080p', label: '1080p' },
-]
+const RESOLUTION_OPTIONS = SHORT_FILM_VIDEO_RESOLUTION_OPTIONS
 
 const FPS_OPTIONS = [24, 25, 30]
 
@@ -89,6 +94,7 @@ const DEFAULT_DRAFT = Object.freeze({
   videoFps: 24,
   screenplay: DEFAULT_SCREENPLAY,
   voiceWorkflow: 'text_to_speech',
+  keyframeWorkflow: 'nano-banana-2',
 })
 
 const DEFAULT_CHARACTERS = Object.freeze([
@@ -99,7 +105,7 @@ const DEFAULT_CHARACTERS = Object.freeze([
     role: 'Lead',
     visualNotes: 'Early 30s, tired denim jacket, anxious but trying to stay composed.',
     referenceAssetId: '',
-    voicePreset: 'Roger',
+    voicePreset: 'Roger (male, american)',
     voiceNotes: 'American male, grounded, dry, tense but not theatrical.',
   },
   {
@@ -109,7 +115,7 @@ const DEFAULT_CHARACTERS = Object.freeze([
     role: 'Co-lead',
     visualNotes: 'Late 20s, black raincoat, calm expression, knows more than she says.',
     referenceAssetId: '',
-    voicePreset: 'Laura',
+    voicePreset: 'Laura (female, american)',
     voiceNotes: 'American female, quiet confidence, subtle menace, natural pace.',
   },
 ])
@@ -165,7 +171,7 @@ function normalizeCharacters(value) {
     role: normalizeText(entry?.role, 'Character'),
     visualNotes: String(entry?.visualNotes || ''),
     referenceAssetId: String(entry?.referenceAssetId || ''),
-    voicePreset: normalizeText(entry?.voicePreset, 'Roger'),
+    voicePreset: normalizeText(entry?.voicePreset, 'Roger (male, american)'),
     voiceNotes: String(entry?.voiceNotes || ''),
   }))
 }
@@ -197,6 +203,7 @@ function normalizeDraft(rawDraft = {}) {
     videoFps: normalizeNumber(raw.videoFps, FPS_OPTIONS, DEFAULT_DRAFT.videoFps),
     screenplay: String(raw.screenplay || DEFAULT_DRAFT.screenplay),
     voiceWorkflow: normalizeOption(raw.voiceWorkflow, VOICE_WORKFLOW_OPTIONS, DEFAULT_DRAFT.voiceWorkflow),
+    keyframeWorkflow: normalizeOption(raw.keyframeWorkflow, SHORT_FILM_KEYFRAME_WORKFLOW_OPTIONS, DEFAULT_DRAFT.keyframeWorkflow),
   }
 }
 
@@ -337,7 +344,7 @@ function createShotPlan({ screenplay, characters, locations, runtimeSeconds }) {
       characterSlug: line.slug,
       dialogueId: line.id,
       keyframe: `${line.speaker} in ${primaryLocation.name}, matching wardrobe and lighting, dialogue coverage, cinematic close framing.`,
-      motion: `${line.speaker} performs the line naturally with subtle facial motion. Hold continuity with the previous shot.`,
+      motion: buildShortFilmDialogueMotionPrompt(line.speaker),
       duration: closeDuration,
     })
     if (index % 2 === 0) {
@@ -409,6 +416,7 @@ Rules:
 5. Every shot should include: Scene, Shot title, Start estimate, Length, Location slug, Characters visible, Dialogue audio if any, Shot type, Keyframe prompt, Motion prompt, and Camera.
 6. Include reaction shots, wide shots, inserts, and cutaways where useful so the edit has coverage.
 7. Do not include transitions unless the story explicitly needs one.
+8. For any shot with Dialogue audio, the Motion prompt must explicitly request readable speech motion: ${SHORT_FILM_DIALOGUE_MOUTH_GUIDANCE} Do not use vague phrases like "subtle facial motion" for speaking shots.
 
 Required format:
 
@@ -429,7 +437,7 @@ Characters visible: [character_slug, character_slug, or none]
 Dialogue audio: [character_slug line text, or none]
 Shot type: [wide | close-up | two-shot | reaction | insert | cutaway]
 Keyframe prompt: [opening still prompt with location, character, wardrobe, lighting, palette, composition]
-Motion prompt: [performance, camera movement, blocking, atmosphere]
+Motion prompt: [for dialogue shots, clear visible mouth opening and lip/jaw/cheek movement synced to the words; for non-dialogue shots, performance, camera movement, blocking, atmosphere]
 Camera: [lens/framing/movement]
 
 (Continue until the short film is covered.)`
@@ -481,6 +489,10 @@ function ReferencePreview({ asset }) {
 
 export default function ShortFilmEasyMode({
   assets = [],
+  generationQueue = [],
+  onQueueVoices,
+  onQueueKeyframes,
+  onQueueVideos,
   setResolution,
   setImageResolution,
   setYoloVideoFps,
@@ -492,6 +504,10 @@ export default function ShortFilmEasyMode({
   const [shotPlan, setShotPlan] = useState(initial.shotPlan)
   const [briefStatus, setBriefStatus] = useState('')
   const [voiceStatus, setVoiceStatus] = useState('')
+  const [keyframeStatus, setKeyframeStatus] = useState('')
+  const [videoStatus, setVideoStatus] = useState('')
+  const [selectedVideoShotId, setSelectedVideoShotId] = useState('')
+  const [videoPromptOverrides, setVideoPromptOverrides] = useState({})
 
   const imageAssets = useMemo(
     () => assets.filter((asset) => asset?.type === 'image'),
@@ -510,6 +526,85 @@ export default function ShortFilmEasyMode({
     () => buildLlmBrief({ draft, characters, locations }),
     [characters, draft, locations]
   )
+  const voiceJobByDialogueId = useMemo(() => {
+    const map = new Map()
+    for (const job of generationQueue || []) {
+      if (job?.workflowId !== ELEVENLABS_TTS_WORKFLOW_ID) continue
+      if (job?.shortFilm?.kind !== 'dialogue-voice') continue
+      if (job.shortFilm.title && job.shortFilm.title !== draft.title) continue
+      const dialogueId = String(job.shortFilm.dialogueId || '')
+      if (!dialogueId) continue
+      const previous = map.get(dialogueId)
+      if (!previous || Number(job.createdAt || 0) >= Number(previous.createdAt || 0)) {
+        map.set(dialogueId, job)
+      }
+    }
+    return map
+  }, [draft.title, generationQueue])
+  const keyframeJobByShotId = useMemo(() => {
+    const map = new Map()
+    for (const job of generationQueue || []) {
+      if (job?.shortFilm?.kind !== 'shot-keyframe') continue
+      if (job.shortFilm.title && job.shortFilm.title !== draft.title) continue
+      const shotId = String(job.shortFilm.shotId || '')
+      if (!shotId) continue
+      const previous = map.get(shotId)
+      if (!previous || Number(job.createdAt || 0) >= Number(previous.createdAt || 0)) {
+        map.set(shotId, job)
+      }
+    }
+    return map
+  }, [draft.title, generationQueue])
+  const keyframeAssetByShotId = useMemo(() => {
+    const map = new Map()
+    for (const asset of assets || []) {
+      if (asset?.type !== 'image') continue
+      if (asset?.shortFilm?.kind !== 'shot-keyframe') continue
+      if (asset.shortFilm.title && asset.shortFilm.title !== draft.title) continue
+      const shotId = String(asset.shortFilm.shotId || '')
+      if (!shotId) continue
+      map.set(shotId, asset)
+    }
+    return map
+  }, [assets, draft.title])
+  const voiceAssetByDialogueId = useMemo(() => {
+    const map = new Map()
+    for (const asset of assets || []) {
+      if (asset?.type !== 'audio') continue
+      if (asset?.shortFilm?.kind !== 'dialogue-voice') continue
+      if (asset.shortFilm.title && asset.shortFilm.title !== draft.title) continue
+      const dialogueId = String(asset.shortFilm.dialogueId || '')
+      if (!dialogueId) continue
+      map.set(dialogueId, asset)
+    }
+    return map
+  }, [assets, draft.title])
+  const videoJobByShotId = useMemo(() => {
+    const map = new Map()
+    for (const job of generationQueue || []) {
+      if (job?.shortFilm?.kind !== 'shot-video') continue
+      if (job.shortFilm.title && job.shortFilm.title !== draft.title) continue
+      const shotId = String(job.shortFilm.shotId || '')
+      if (!shotId) continue
+      const previous = map.get(shotId)
+      if (!previous || Number(job.createdAt || 0) >= Number(previous.createdAt || 0)) {
+        map.set(shotId, job)
+      }
+    }
+    return map
+  }, [draft.title, generationQueue])
+  const videoAssetByShotId = useMemo(() => {
+    const map = new Map()
+    for (const asset of assets || []) {
+      if (asset?.type !== 'video') continue
+      if (asset?.shortFilm?.kind !== 'shot-video') continue
+      if (asset.shortFilm.title && asset.shortFilm.title !== draft.title) continue
+      const shotId = String(asset.shortFilm.shotId || '')
+      if (!shotId) continue
+      map.set(shotId, asset)
+    }
+    return map
+  }, [assets, draft.title])
 
   useEffect(() => {
     if (typeof localStorage === 'undefined') return
@@ -556,7 +651,7 @@ export default function ShortFilmEasyMode({
         role: 'Supporting',
         visualNotes: '',
         referenceAssetId: '',
-        voicePreset: 'Roger',
+        voicePreset: 'Roger (male, american)',
         voiceNotes: '',
       },
     ])
@@ -612,8 +707,173 @@ export default function ShortFilmEasyMode({
     updateDraft({ step: 'shotPlan' })
   }
 
-  const queueVoicePlaceholder = () => {
-    setVoiceStatus('Voice generation will be wired after the ElevenLabs Comfy workflow JSON is added.')
+  const queueVoices = async () => {
+    if (draft.voiceWorkflow !== 'text_to_speech') {
+      setVoiceStatus('Only Text to Speech is wired right now. Text to Dialogue and Speech to Speech are good future options, but this pass creates one editable clip per line.')
+      return
+    }
+
+    if (typeof onQueueVoices !== 'function') {
+      setVoiceStatus('Voice queue is not available in this build yet.')
+      return
+    }
+
+    setVoiceStatus('Queueing dialogue voice clips...')
+    try {
+      const result = await onQueueVoices({
+        title: draft.title,
+        voiceWorkflow: draft.voiceWorkflow,
+        dialogueLines,
+        characters,
+      })
+      setVoiceStatus(result?.message || 'Voice queue updated.')
+    } catch (error) {
+      setVoiceStatus(error?.message || 'Could not queue voices.')
+    }
+  }
+
+  const queueKeyframes = async () => {
+    const plan = shotPlan.length > 0
+      ? shotPlan
+      : createShotPlan({ screenplay: draft.screenplay, characters, locations, runtimeSeconds: draft.runtimeSeconds })
+
+    if (plan.length === 0) {
+      setKeyframeStatus('Generate or refresh the shot plan before creating keyframes.')
+      return
+    }
+
+    if (typeof onQueueKeyframes !== 'function') {
+      setKeyframeStatus('Keyframe queue is not available in this build yet.')
+      return
+    }
+
+    setKeyframeStatus('Queueing short-film keyframes...')
+    try {
+      const result = await onQueueKeyframes({
+        title: draft.title,
+        keyframeWorkflow: draft.keyframeWorkflow,
+        shotPlan: plan,
+        characters,
+        locations,
+        resolution: outputResolution,
+        fps: draft.videoFps,
+      })
+      setKeyframeStatus(result?.message || 'Keyframe queue updated.')
+    } catch (error) {
+      setKeyframeStatus(error?.message || 'Could not queue keyframes.')
+    }
+  }
+
+  const queueVideos = async () => {
+    const plan = shotPlan.length > 0
+      ? shotPlan
+      : createShotPlan({ screenplay: draft.screenplay, characters, locations, runtimeSeconds: draft.runtimeSeconds })
+
+    if (plan.length === 0) {
+      setVideoStatus('Generate or refresh the shot plan before creating videos.')
+      return
+    }
+
+    if (typeof onQueueVideos !== 'function') {
+      setVideoStatus('Video queue is not available in this build yet.')
+      return
+    }
+
+    setVideoStatus('Queueing short-film video shots...')
+    try {
+      const result = await onQueueVideos({
+        title: draft.title,
+        shotPlan: plan,
+        dialogueLines,
+        characters,
+        locations,
+        resolution: outputResolution,
+        fps: draft.videoFps,
+      })
+      setVideoStatus(result?.message || 'Video queue updated.')
+    } catch (error) {
+      setVideoStatus(error?.message || 'Could not queue videos.')
+    }
+  }
+
+  const getShortFilmShotContext = (shot) => {
+    const dialogue = shot?.dialogueId ? dialogueLines.find((entry) => entry.id === shot.dialogueId) : null
+    const character = characters.find((entry) => entry.slug === (shot?.characterSlug || dialogue?.slug)) || null
+    const location = locations.find((entry) => entry.slug === shot?.locationSlug) || null
+    const voiceAsset = shot?.dialogueId ? voiceAssetByDialogueId.get(String(shot.dialogueId)) : null
+    return {
+      dialogue,
+      character,
+      location,
+      voiceAsset,
+      usesAudio: Boolean(voiceAsset),
+    }
+  }
+
+  const getDefaultVideoPrompt = (shot) => {
+    const context = getShortFilmShotContext(shot)
+    return buildShortFilmVideoPrompt({
+      title: draft.title,
+      shot,
+      character: context.character,
+      location: context.location,
+      dialogue: context.dialogue,
+      usesAudio: context.usesAudio,
+    })
+  }
+
+  const getEditableVideoPrompt = (shot) => {
+    const shotId = String(shot?.id || '')
+    if (shotId && Object.prototype.hasOwnProperty.call(videoPromptOverrides, shotId)) {
+      return videoPromptOverrides[shotId]
+    }
+    return getDefaultVideoPrompt(shot)
+  }
+
+  const updateVideoPromptOverride = (shotId, value) => {
+    const normalizedShotId = String(shotId || '')
+    if (!normalizedShotId) return
+    setVideoPromptOverrides((prev) => ({
+      ...prev,
+      [normalizedShotId]: value,
+    }))
+  }
+
+  const resetVideoPromptOverride = (shot) => {
+    const shotId = String(shot?.id || '')
+    if (!shotId) return
+    setVideoPromptOverrides((prev) => {
+      const next = { ...prev }
+      delete next[shotId]
+      return next
+    })
+  }
+
+  const queueSelectedVideo = async (shot) => {
+    if (!shot) return
+    const plan = shotPlan.length > 0
+      ? shotPlan
+      : createShotPlan({ screenplay: draft.screenplay, characters, locations, runtimeSeconds: draft.runtimeSeconds })
+    const shotId = String(shot.id || '')
+    if (!shotId) return
+    setVideoStatus(`Queueing rerun for ${shot.title || shotId}...`)
+    try {
+      const result = await onQueueVideos?.({
+        title: draft.title,
+        shotPlan: plan,
+        dialogueLines,
+        characters,
+        locations,
+        resolution: outputResolution,
+        fps: draft.videoFps,
+        shotIds: [shotId],
+        promptOverrides: { [shotId]: getEditableVideoPrompt(shot) },
+        force: true,
+      })
+      setVideoStatus(result?.message || 'Selected shot queued.')
+    } catch (error) {
+      setVideoStatus(error?.message || 'Could not queue selected shot.')
+    }
   }
 
   const renderStoryStep = () => (
@@ -813,6 +1073,7 @@ export default function ShortFilmEasyMode({
                         onChange={(event) => updateCharacter(character.id, { voicePreset: event.target.value })}
                         className="mt-1 w-full rounded-lg border border-sf-dark-700 bg-sf-dark-950 px-3 py-2 text-xs text-sf-text-primary outline-none focus:border-sf-accent"
                       />
+                      <p className="mt-1 text-[10px] text-sf-text-muted">Use the ElevenLabs selector name, e.g. Roger (male, american).</p>
                     </div>
                     <div>
                       <FieldLabel>Voice notes</FieldLabel>
@@ -988,7 +1249,7 @@ export default function ShortFilmEasyMode({
       <div>
         <h2 className="text-lg font-semibold text-sf-text-primary">Generate character voices.</h2>
         <p className="mt-1 text-sm text-sf-text-secondary">
-          Dialogue lines are routed through each character voice profile. The actual ComfyUI workflow JSON can be plugged in after.
+          Dialogue lines are routed through each character voice profile. Text to Speech creates one editable audio clip per line.
         </p>
       </div>
       <div className="grid gap-3 lg:grid-cols-[0.9fr_1.1fr]">
@@ -1010,8 +1271,8 @@ export default function ShortFilmEasyMode({
               </button>
             ))}
           </div>
-          <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-            Workflow hook pending: send the ElevenLabs Comfy workflow JSON when you want this button to queue real audio.
+          <div className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
+            Text to Speech is wired to the ElevenLabs ComfyUI workflow. The other voice modes are placeholders for later.
           </div>
         </div>
 
@@ -1023,7 +1284,7 @@ export default function ShortFilmEasyMode({
             </div>
             <button
               type="button"
-              onClick={queueVoicePlaceholder}
+              onClick={queueVoices}
               className="inline-flex items-center gap-2 rounded-lg border border-sf-dark-600 bg-sf-dark-800 px-3 py-2 text-xs font-semibold text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary"
             >
               <Mic className="h-4 w-4" />
@@ -1038,11 +1299,31 @@ export default function ShortFilmEasyMode({
               </div>
             ) : dialogueLines.map((line, index) => {
               const character = characters.find((entry) => entry.slug === line.slug)
+              const voiceJob = voiceJobByDialogueId.get(line.id)
+              const voiceJobLabel = voiceJob?.status === 'done'
+                ? 'voice ready'
+                : voiceJob?.status === 'error'
+                  ? 'failed'
+                  : voiceJob?.status
+                    ? voiceJob.status
+                    : ''
+              const voiceJobClass = voiceJob?.status === 'done'
+                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                : voiceJob?.status === 'error'
+                  ? 'border-red-500/40 bg-red-500/10 text-red-200'
+                  : 'border-sf-accent/40 bg-sf-accent/10 text-sf-accent'
               return (
                 <div key={line.id} className="rounded-lg border border-sf-dark-700 bg-sf-dark-950 p-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs font-semibold text-sf-text-primary">{index + 1}. {line.speaker}</div>
-                    <span className="rounded-full border border-sf-dark-600 px-2 py-0.5 text-[10px] text-sf-text-muted">{character?.voicePreset || currentVoiceWorkflow.label}</span>
+                    <div className="flex flex-wrap justify-end gap-1.5">
+                      {voiceJobLabel && (
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] ${voiceJobClass}`}>
+                          {voiceJobLabel}
+                        </span>
+                      )}
+                      <span className="rounded-full border border-sf-dark-600 px-2 py-0.5 text-[10px] text-sf-text-muted">{character?.voicePreset || currentVoiceWorkflow.label}</span>
+                    </div>
                   </div>
                   <p className="mt-2 text-xs leading-relaxed text-sf-text-secondary">"{line.text}"</p>
                 </div>
@@ -1137,65 +1418,302 @@ export default function ShortFilmEasyMode({
         </div>
         <button
           type="button"
-          disabled
-          className="inline-flex items-center gap-2 rounded-lg border border-sf-dark-700 bg-sf-dark-800 px-3 py-2 text-xs font-semibold text-sf-text-muted"
-          title="Queue wiring comes after the short-film parser and workflow hooks."
+          onClick={queueKeyframes}
+          className="inline-flex items-center gap-2 rounded-lg bg-sf-accent px-3 py-2 text-xs font-semibold text-white hover:bg-sf-accent/90"
         >
           <Wand2 className="h-4 w-4" />
           Create Keyframes
         </button>
       </div>
-      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-        First app pass: shot planning is available now. Keyframe queueing will be wired to Nano Banana after the final script format is locked.
+
+      <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-900/80 p-4">
+        <FieldLabel>Keyframe renderer</FieldLabel>
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          {SHORT_FILM_KEYFRAME_WORKFLOW_OPTIONS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => updateDraft({ keyframeWorkflow: option.id })}
+              className={`rounded-lg border p-3 text-left transition-colors ${buttonClass(draft.keyframeWorkflow === option.id)}`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold text-sf-text-primary">{option.label}</div>
+                <span className="rounded-full border border-sf-dark-600 px-2 py-0.5 text-[10px] text-sf-text-muted">{option.runtimeLabel}</span>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-sf-text-muted">{option.description}</p>
+            </button>
+          ))}
+        </div>
       </div>
+
+      {keyframeStatus && (
+        <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-950 px-4 py-3 text-sm text-sf-text-secondary">
+          {keyframeStatus}
+        </div>
+      )}
+
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {(shotPlan.length > 0 ? shotPlan : createShotPlan({ screenplay: draft.screenplay, characters, locations, runtimeSeconds: draft.runtimeSeconds }).slice(0, 6)).map((shot, index) => (
-          <div key={shot.id || index} className="rounded-xl border border-sf-dark-700 bg-sf-dark-900/80 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs font-semibold text-sf-text-primary">Shot {index + 1}</div>
-              <span className="rounded-full border border-sf-dark-600 px-2 py-0.5 text-[10px] text-sf-text-muted">pending</span>
+        {(shotPlan.length > 0 ? shotPlan : createShotPlan({ screenplay: draft.screenplay, characters, locations, runtimeSeconds: draft.runtimeSeconds }).slice(0, 6)).map((shot, index) => {
+          const keyframeJob = keyframeJobByShotId.get(shot.id)
+          const keyframeAsset = keyframeAssetByShotId.get(shot.id)
+          const label = keyframeAsset || keyframeJob?.status === 'done'
+            ? 'ready'
+            : keyframeJob?.status === 'error'
+              ? 'failed'
+              : keyframeJob?.status || 'pending'
+          const labelClass = label === 'ready'
+            ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+            : label === 'failed'
+              ? 'border-red-500/40 bg-red-500/10 text-red-200'
+              : label === 'pending'
+                ? 'border-sf-dark-600 text-sf-text-muted'
+                : 'border-sf-accent/40 bg-sf-accent/10 text-sf-accent'
+          const keyframeAssetUrl = getAssetUrl(keyframeAsset)
+          return (
+            <div key={shot.id || index} className="rounded-xl border border-sf-dark-700 bg-sf-dark-900/80 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs font-semibold text-sf-text-primary">Shot {index + 1}</div>
+                <span className={`rounded-full border px-2 py-0.5 text-[10px] ${labelClass}`}>{label}</span>
+              </div>
+              {keyframeAssetUrl && (
+                <div className="mt-3 aspect-video overflow-hidden rounded-lg border border-sf-dark-700 bg-sf-dark-950">
+                  <img src={keyframeAssetUrl} alt={getAssetName(keyframeAsset)} className="h-full w-full object-cover" />
+                </div>
+              )}
+              <p className="mt-2 text-xs leading-relaxed text-sf-text-secondary">{shot.keyframe}</p>
             </div>
-            <p className="mt-2 text-xs leading-relaxed text-sf-text-secondary">{shot.keyframe}</p>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
 
-  const renderVideosStep = () => (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-sf-text-primary">Generate shot videos.</h2>
-          <p className="mt-1 text-sm text-sf-text-secondary">
-            Video jobs will use approved keyframes, shot motion prompts, and dialogue audio when a character speaks.
+  const renderVideosStep = () => {
+    const plan = shotPlan.length > 0
+      ? shotPlan
+      : createShotPlan({ screenplay: draft.screenplay, characters, locations, runtimeSeconds: draft.runtimeSeconds })
+    const readyCount = plan.filter((shot) => (
+      videoAssetByShotId.get(shot.id) || videoJobByShotId.get(shot.id)?.status === 'done'
+    )).length
+    const selectedShot = plan.find((shot) => shot.id === selectedVideoShotId) || plan[0] || null
+    const selectedShotIndex = selectedShot ? Math.max(0, plan.findIndex((shot) => shot.id === selectedShot.id)) : -1
+    const selectedShotContext = selectedShot ? getShortFilmShotContext(selectedShot) : null
+    const selectedKeyframeAsset = selectedShot ? keyframeAssetByShotId.get(selectedShot.id) : null
+    const selectedNeedsVoice = Boolean(selectedShot?.dialogueId && !selectedShotContext?.voiceAsset)
+    const selectedPrompt = selectedShot ? getEditableVideoPrompt(selectedShot) : ''
+    const selectedHasCustomPrompt = Boolean(selectedShot?.id && Object.prototype.hasOwnProperty.call(videoPromptOverrides, selectedShot.id))
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-sf-text-primary">Generate shot videos.</h2>
+            <p className="mt-1 text-sm text-sf-text-secondary">
+              LTX 2.3 uses each approved keyframe as the first frame. Dialogue shots use the matching generated voice clip when it exists.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={queueVideos}
+            className="inline-flex items-center gap-2 rounded-lg bg-sf-accent px-3 py-2 text-xs font-semibold text-white hover:bg-sf-accent/90"
+          >
+            <Play className="h-4 w-4" />
+            Queue Videos
+          </button>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          <Stat label="Video model" value="LTX 2.3" />
+          <Stat label="Ready videos" value={`${readyCount}/${plan.length || 0}`} />
+          <Stat label="FPS" value={draft.videoFps} />
+        </div>
+
+        <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-900/80 p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <FieldLabel>Video render size</FieldLabel>
+              <div className="mt-1 text-sm font-semibold text-sf-text-primary">{outputResolutionLabel}</div>
+              <p className="mt-1 text-xs text-sf-text-muted">
+                New LTX 2.3 video jobs use this size. Use 720p for speed, 1080p for cleaner final shots.
+              </p>
+            </div>
+            <div className="grid min-w-[220px] grid-cols-2 gap-2">
+              {RESOLUTION_OPTIONS.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => updateDraft({ resolutionPreset: option.id })}
+                  className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${buttonClass(draft.resolutionPreset === option.id)}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {videoStatus && (
+          <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-950 px-4 py-3 text-sm text-sf-text-secondary">
+            {videoStatus}
+          </div>
+        )}
+
+        <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-900/80 p-4">
+          <div className="flex items-center gap-2 font-semibold text-sf-text-primary">
+            <CheckCircle2 className="h-4 w-4 text-sf-accent" />
+            Routing principle
+          </div>
+          <p className="mt-2 text-sm leading-relaxed text-sf-text-secondary">
+            Silent shots queue as LTX 2.3 image-to-video. Dialogue shots queue as LTX 2.3 image-and-audio-to-video once their voice clips are ready.
           </p>
         </div>
-        <button
-          type="button"
-          disabled
-          className="inline-flex items-center gap-2 rounded-lg border border-sf-dark-700 bg-sf-dark-800 px-3 py-2 text-xs font-semibold text-sf-text-muted"
-        >
-          <Play className="h-4 w-4" />
-          Queue Videos
-        </button>
-      </div>
-      <div className="grid gap-3 md:grid-cols-3">
-        <Stat label="Video model" value="LTX 2.3 default" />
-        <Stat label="Resolution" value={outputResolutionLabel} />
-        <Stat label="FPS" value={draft.videoFps} />
-      </div>
-      <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-900/80 p-4">
-        <div className="flex items-center gap-2 font-semibold text-sf-text-primary">
-          <CheckCircle2 className="h-4 w-4 text-sf-accent" />
-          Routing principle
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {plan.map((shot, index) => {
+            const keyframeAsset = keyframeAssetByShotId.get(shot.id)
+            const voiceAsset = shot.dialogueId ? voiceAssetByDialogueId.get(String(shot.dialogueId)) : null
+            const videoJob = videoJobByShotId.get(shot.id)
+            const videoAsset = videoAssetByShotId.get(shot.id)
+            const isSelected = selectedShot?.id === shot.id
+            const label = (videoAsset || videoJob?.status === 'done')
+              ? 'ready'
+              : videoJob?.status === 'error'
+                ? 'failed'
+                : videoJob?.status || (keyframeAsset ? 'pending' : 'needs keyframe')
+            const labelClass = label === 'ready'
+              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+              : label === 'failed'
+                ? 'border-red-500/40 bg-red-500/10 text-red-200'
+                : label === 'needs keyframe'
+                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                  : label === 'pending'
+                    ? 'border-sf-dark-600 text-sf-text-muted'
+                    : 'border-sf-accent/40 bg-sf-accent/10 text-sf-accent'
+            const keyframeUrl = getAssetUrl(keyframeAsset)
+            const videoUrl = getAssetUrl(videoAsset)
+            return (
+              <div
+                key={shot.id || index}
+                role="button"
+                tabIndex={0}
+                onClick={() => setSelectedVideoShotId(shot.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    setSelectedVideoShotId(shot.id)
+                  }
+                }}
+                className={`cursor-pointer rounded-xl border p-4 transition-colors ${
+                  isSelected
+                    ? 'border-sf-accent bg-sf-accent/10'
+                    : 'border-sf-dark-700 bg-sf-dark-900/80 hover:border-sf-dark-500'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs font-semibold text-sf-text-primary">Shot {index + 1}: {shot.title}</div>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] ${labelClass}`}>{label}</span>
+                </div>
+                {(videoUrl || keyframeUrl) && (
+                  <div className="mt-3 aspect-video overflow-hidden rounded-lg border border-sf-dark-700 bg-sf-dark-950">
+                    {videoUrl ? (
+                      <video src={videoUrl} className="h-full w-full object-cover" muted playsInline controls />
+                    ) : (
+                      <img src={keyframeUrl} alt={getAssetName(keyframeAsset)} className="h-full w-full object-cover" />
+                    )}
+                  </div>
+                )}
+                <div className="mt-3 flex flex-wrap gap-1.5 text-[10px]">
+                  <span className="rounded-full border border-sf-dark-600 px-2 py-0.5 text-sf-text-muted">{shot.duration || 4}s</span>
+                  <span className="rounded-full border border-sf-dark-600 px-2 py-0.5 text-sf-text-muted">{shot.type || 'shot'}</span>
+                  {shot.dialogueId && (
+                    <span className={`rounded-full border px-2 py-0.5 ${voiceAsset ? 'border-emerald-500/40 text-emerald-200' : 'border-amber-500/40 text-amber-200'}`}>
+                      {voiceAsset ? 'voice ready' : 'needs voice'}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-sf-text-secondary">{shot.motion}</p>
+              </div>
+            )
+          })}
         </div>
-        <p className="mt-2 text-sm leading-relaxed text-sf-text-secondary">
-          Dialogue shots should receive the matching character audio. Silent inserts and cutaways stay visual only. The script and shot plan decide which is which.
-        </p>
+
+        {selectedShot && (
+          <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-900/80 p-4">
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
+              Not happy with a short-film shot? Select it above, edit the full video prompt here, then rerun just that shot as an alternate take.
+            </div>
+            <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-sf-text-primary">
+                  Shot {selectedShotIndex + 1}: {selectedShot.title || selectedShot.id}
+                </h3>
+                <div className="mt-1 text-[10px] text-sf-text-muted">
+                  {[
+                    selectedShotContext?.usesAudio ? 'Dialogue LTX 2.3' : 'LTX 2.3',
+                    outputResolutionLabel,
+                    `${draft.videoFps} fps`,
+                    `${selectedShot.duration || 4}s`,
+                    selectedShot.type,
+                  ].filter(Boolean).join(' / ')}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => queueSelectedVideo(selectedShot)}
+                disabled={!selectedKeyframeAsset || selectedNeedsVoice || typeof onQueueVideos !== 'function'}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-sf-accent px-3 py-2 text-xs font-semibold text-white hover:bg-sf-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Play className="h-4 w-4" />
+                Run Selected Shot
+              </button>
+            </div>
+            {(!selectedKeyframeAsset || selectedNeedsVoice) && (
+              <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                {!selectedKeyframeAsset
+                  ? 'This shot needs a keyframe before video can run.'
+                  : 'This dialogue shot needs its generated voice clip before video can run.'}
+              </div>
+            )}
+            <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_280px]">
+              <label className="block text-xs text-sf-text-secondary">
+                <span className="text-[10px] uppercase tracking-wider text-sf-text-muted">Edit full video prompt</span>
+                <textarea
+                  value={selectedPrompt}
+                  onChange={(event) => updateVideoPromptOverride(selectedShot.id, event.target.value)}
+                  rows={9}
+                  className="mt-2 w-full resize-y rounded-lg border border-sf-dark-700 bg-sf-dark-950 px-3 py-2 font-mono text-xs leading-relaxed text-sf-text-primary outline-none focus:border-sf-accent"
+                  placeholder="Describe the exact visual motion, speech, and sound for this one rerun..."
+                />
+              </label>
+              <div className="space-y-3 rounded-lg border border-sf-dark-700 bg-sf-dark-950 p-3 text-xs text-sf-text-secondary">
+                <div>
+                  <FieldLabel>Shot info</FieldLabel>
+                  <div className="mt-2 space-y-1">
+                    <div>Keyframe: {selectedKeyframeAsset ? 'ready' : 'missing'}</div>
+                    {selectedShot.dialogueId && <div>Voice: {selectedShotContext?.voiceAsset ? 'ready' : 'missing'}</div>}
+                    {selectedShotContext?.dialogue?.text && (
+                      <div className="italic text-sf-text-muted">"{selectedShotContext.dialogue.text}"</div>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => resetVideoPromptOverride(selectedShot)}
+                  disabled={!selectedHasCustomPrompt}
+                  className="w-full rounded-lg border border-sf-dark-600 px-3 py-2 text-xs font-semibold text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Reset To Default Prompt
+                </button>
+                <p className="text-[11px] leading-relaxed text-sf-text-muted">
+                  This does not rewrite the screenplay or shot plan. It only changes the next render queued from this selected-shot panel.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-    </div>
-  )
+    )
+  }
 
   const renderAssembleStep = () => (
     <div className="space-y-4">
@@ -1333,7 +1851,7 @@ export default function ShortFilmEasyMode({
                     <Mic className="h-3.5 w-3.5 text-emerald-400" />
                     Comfy ElevenLabs
                   </div>
-                  <p className="mt-1 text-[11px] text-sf-text-muted">Voice generation through ComfyUI credits once workflow JSON is connected.</p>
+                  <p className="mt-1 text-[11px] text-sf-text-muted">Text-to-speech dialogue clips through the bundled ElevenLabs ComfyUI workflow.</p>
                 </div>
                 <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-950 p-3">
                   <div className="flex items-center gap-2 text-xs font-semibold text-sf-text-primary">
@@ -1348,7 +1866,7 @@ export default function ShortFilmEasyMode({
             <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-900/80 p-4">
               <h3 className="text-sm font-semibold text-sf-text-primary">Open implementation notes</h3>
               <p className="mt-2 text-xs leading-relaxed text-sf-text-muted">
-                Next wiring pass needs the real ElevenLabs workflow JSON and the final short-film script parser format.
+                Voices, keyframes, and video renders are wired. Timeline assembly is the next pass.
               </p>
             </div>
           </div>

@@ -444,13 +444,18 @@ function App() {
             </WorkspaceErrorBoundary>
           </div>
         )}
-        {mainTab === 'export' ? (
+        {/* Export tab - keep mounted so settings, queue, and progress survive tab switches */}
+        <div
+          className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950"
+          style={{ display: mainTab === 'export' ? 'flex' : 'none' }}
+        >
           <ExportPanel />
-        ) : mainTab === 'stock' ? (
+        </div>
+        {mainTab === 'stock' ? (
           <StockPanel />
         ) : mainTab === 'llm-assistant' ? (
           <LLMAssistantWorkspace />
-        ) : mainTab === 'comfyui' || mainTab === 'generate' || mainTab === 'flow-ai' || mainTab === 'mog' ? null : (
+        ) : mainTab === 'comfyui' || mainTab === 'generate' || mainTab === 'flow-ai' || mainTab === 'mog' || mainTab === 'export' ? null : (
           <>
             {/* Left Panel - Full Height Mode (spans entire left side) */}
             {leftPanelFullHeight && (

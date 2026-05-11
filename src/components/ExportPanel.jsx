@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Plus, Trash2, Play, Settings, Film, Clock } from 'lucide-react'
+import { Download, Plus, Trash2, Play, Settings, Film, Clock, RotateCcw } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import exportTimeline from '../services/exporter'
+
+const EXPORT_SETTINGS_STORAGE_PREFIX = 'comfystudio-export-settings-v1'
 
 const EXPORT_FORMATS = [
   { id: 'mp4', label: 'MP4 (H.264/H.265)' },
@@ -98,6 +100,138 @@ const DEFAULT_CRF = {
   vp9: 32,
 }
 
+const createDefaultExportSettings = (filename) => ({
+  filename,
+  format: 'mp4',
+  videoCodec: 'h264',
+  audioCodec: 'aac',
+  proresProfile: '3',
+  useHardwareEncoder: false,
+  nvencPreset: 'p5',
+  preset: 'medium',
+  qualityMode: 'crf',
+  crf: DEFAULT_CRF.h264,
+  bitrateKbps: 8000,
+  keyframeMode: 'auto',
+  keyframeInterval: 48,
+  resolution: 'project',
+  customWidth: 1920,
+  customHeight: 1080,
+  fps: 'project',
+  range: 'full',
+  renderMode: 'single',
+  includeAudio: true,
+  audioBitrateKbps: 192,
+  audioSampleRate: 44100,
+  audioChannels: 2,
+  useProxyMedia: false,
+  useDirectFramePipe: true,
+})
+
+const EXPORT_PRESETS = [
+  {
+    id: 'balanced-mp4',
+    label: 'Balanced MP4',
+    summary: 'Clean everyday export, project size, H.264.',
+    settings: {
+      format: 'mp4',
+      videoCodec: 'h264',
+      audioCodec: 'aac',
+      useHardwareEncoder: false,
+      preset: 'medium',
+      qualityMode: 'crf',
+      crf: 18,
+      resolution: 'project',
+      fps: 'project',
+      includeAudio: true,
+      audioBitrateKbps: 192,
+      useProxyMedia: false,
+      useDirectFramePipe: true,
+    },
+  },
+  {
+    id: 'fast-nvenc',
+    label: 'Fast NVENC',
+    summary: 'Fast H.264 delivery for NVIDIA systems.',
+    settings: {
+      format: 'mp4',
+      videoCodec: 'h264',
+      audioCodec: 'aac',
+      useHardwareEncoder: true,
+      nvencPreset: 'p5',
+      preset: 'fast',
+      qualityMode: 'crf',
+      crf: 19,
+      resolution: 'project',
+      fps: 'project',
+      includeAudio: true,
+      audioBitrateKbps: 192,
+      useProxyMedia: false,
+      useDirectFramePipe: true,
+    },
+  },
+  {
+    id: 'proxy-review',
+    label: 'Proxy Review',
+    summary: 'Quick review file using proxies and half-res.',
+    settings: {
+      format: 'mp4',
+      videoCodec: 'h264',
+      audioCodec: 'aac',
+      useHardwareEncoder: true,
+      nvencPreset: 'p3',
+      preset: 'veryfast',
+      qualityMode: 'crf',
+      crf: 23,
+      resolution: 'timeline-half',
+      fps: 'project',
+      includeAudio: true,
+      audioBitrateKbps: 160,
+      useProxyMedia: true,
+      useDirectFramePipe: true,
+    },
+  },
+  {
+    id: 'small-h265',
+    label: 'Small H.265',
+    summary: 'Smaller MP4 for sharing, slower decode.',
+    settings: {
+      format: 'mp4',
+      videoCodec: 'h265',
+      audioCodec: 'aac',
+      useHardwareEncoder: true,
+      nvencPreset: 'p5',
+      preset: 'medium',
+      qualityMode: 'crf',
+      crf: 22,
+      resolution: 'project',
+      fps: 'project',
+      includeAudio: true,
+      audioBitrateKbps: 192,
+      useProxyMedia: false,
+      useDirectFramePipe: true,
+    },
+  },
+  {
+    id: 'prores-hq',
+    label: 'ProRes HQ',
+    summary: 'Large editor-friendly MOV master.',
+    settings: {
+      format: 'prores',
+      videoCodec: 'prores',
+      audioCodec: 'aac',
+      proresProfile: '3',
+      useHardwareEncoder: false,
+      resolution: 'project',
+      fps: 'project',
+      includeAudio: true,
+      audioBitrateKbps: 320,
+      useProxyMedia: false,
+      useDirectFramePipe: true,
+    },
+  },
+]
+
 // FFmpeg prores_ks profile: 0=proxy, 1=lt, 2=standard, 3=hq, 4=4444
 const PRORES_PROFILES = [
   { id: '0', label: 'Proxy (smallest)' },
@@ -107,6 +241,46 @@ const PRORES_PROFILES = [
   { id: '4', label: '4444 (alpha)' },
 ]
 
+function getExportSettingsStorageKey(projectHandle, projectName) {
+  const rawProjectKey = projectHandle || projectName || 'global'
+  const safeProjectKey = String(rawProjectKey).replace(/[^\w.-]+/g, '_').slice(-120)
+  return `${EXPORT_SETTINGS_STORAGE_PREFIX}:${safeProjectKey}`
+}
+
+function loadSavedExportSettings(storageKey, defaultSettings) {
+  if (typeof localStorage === 'undefined') return defaultSettings
+  try {
+    const raw = localStorage.getItem(storageKey)
+    if (!raw) return defaultSettings
+    const saved = JSON.parse(raw)
+    if (!saved || typeof saved !== 'object') return defaultSettings
+    return {
+      ...defaultSettings,
+      ...saved,
+      filename: typeof saved.filename === 'string' && saved.filename.trim()
+        ? saved.filename
+        : defaultSettings.filename,
+      format: EXPORT_FORMATS.some((format) => format.id === saved.format && !format.disabled)
+        ? saved.format
+        : defaultSettings.format,
+      renderMode: 'single',
+      useCachedRenders: false,
+      fastSeek: false,
+    }
+  } catch (_) {
+    return defaultSettings
+  }
+}
+
+function saveExportSettings(storageKey, settings) {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(settings))
+  } catch (_) {
+    // Ignore storage failures; export should still work.
+  }
+}
+
 function ExportPanel() {
   const { currentProject, currentProjectHandle, getCurrentTimelineSettings } = useProjectStore()
   const { duration, inPoint, outPoint, getTimelineEndTime, selectedClipIds, clips, transitions, tracks } = useTimelineStore()
@@ -114,36 +288,13 @@ function ExportPanel() {
   
   const projectName = currentProject?.name || 'Untitled'
   const defaultFilename = `${projectName}_export`
+  const defaultSettings = useMemo(() => createDefaultExportSettings(defaultFilename), [defaultFilename])
+  const settingsStorageKey = useMemo(
+    () => getExportSettingsStorageKey(currentProjectHandle, projectName),
+    [currentProjectHandle, projectName]
+  )
   
-  const [settings, setSettings] = useState({
-    filename: defaultFilename,
-    format: 'mp4',
-    videoCodec: 'h264',
-    audioCodec: 'aac',
-    proresProfile: '3',
-    useHardwareEncoder: false,
-    nvencPreset: 'p5',
-    preset: 'medium',
-    qualityMode: 'crf',
-    crf: DEFAULT_CRF.h264,
-    bitrateKbps: 8000,
-    keyframeMode: 'auto',
-    keyframeInterval: 48,
-    resolution: 'project',
-    customWidth: 1920,
-    customHeight: 1080,
-    fps: 'project',
-    range: 'full',
-    renderMode: 'single',
-    includeAudio: true,
-    audioBitrateKbps: 192,
-    audioSampleRate: 44100,
-    audioChannels: 2,
-    useCachedRenders: false,
-    useProxyMedia: false,
-    fastSeek: false,
-    useDirectFramePipe: true,
-  })
+  const [settings, setSettings] = useState(() => loadSavedExportSettings(settingsStorageKey, defaultSettings))
   const [queue, setQueue] = useState([])
   const [isExporting, setIsExporting] = useState(false)
   const [exportStatus, setExportStatus] = useState('')
@@ -167,6 +318,18 @@ function ExportPanel() {
   const [queuePauseRequested, setQueuePauseRequested] = useState(false)
   const queueRef = useRef([])
   const queueControllerRef = useRef({ running: false, paused: false })
+  const previousSettingsStorageKeyRef = useRef(settingsStorageKey)
+
+  useEffect(() => {
+    if (previousSettingsStorageKeyRef.current === settingsStorageKey) return
+    previousSettingsStorageKeyRef.current = settingsStorageKey
+    setSettings(loadSavedExportSettings(settingsStorageKey, defaultSettings))
+    setQueue([])
+  }, [defaultSettings, settingsStorageKey])
+
+  useEffect(() => {
+    saveExportSettings(settingsStorageKey, settings)
+  }, [settings, settingsStorageKey])
 
   useEffect(() => {
     queueRef.current = queue
@@ -301,6 +464,50 @@ function ExportPanel() {
       return next
     })
   }
+
+  const handleApplyExportPreset = (exportPreset) => {
+    if (!exportPreset) return
+    setSettings((prev) => {
+      const next = {
+        ...prev,
+        ...exportPreset.settings,
+      }
+      const requestedCodec = next.videoCodec
+      const requestedHardware = Boolean(next.useHardwareEncoder)
+      const hardwareSupported = requestedCodec === 'h265'
+        ? nvencStatus.h265
+        : requestedCodec === 'h264'
+          ? nvencStatus.h264
+          : false
+
+      if (requestedHardware && nvencStatus.checked && !hardwareSupported) {
+        next.useHardwareEncoder = false
+      }
+      if (next.format === 'webm' || next.format === 'prores' || next.videoCodec === 'vp9') {
+        next.useHardwareEncoder = false
+      }
+      const supportedVideo = VIDEO_CODECS[next.format] || []
+      if (!supportedVideo.find(codec => codec.id === next.videoCodec)) {
+        next.videoCodec = supportedVideo[0]?.id || prev.videoCodec
+      }
+      const supportedAudio = AUDIO_CODECS[next.format] || []
+      if (!supportedAudio.find(codec => codec.id === next.audioCodec)) {
+        next.audioCodec = supportedAudio[0]?.id || prev.audioCodec
+      }
+      return next
+    })
+  }
+
+  const handleResetSettings = () => {
+    setSettings(createDefaultExportSettings(defaultFilename))
+  }
+
+  const activeExportPresetId = useMemo(() => {
+    const isEqual = (a, b) => String(a) === String(b)
+    return EXPORT_PRESETS.find((exportPreset) => (
+      Object.entries(exportPreset.settings).every(([key, value]) => isEqual(settings[key], value))
+    ))?.id || null
+  }, [settings])
 
   const selectedNvencCodecSupported = settings.videoCodec === 'h265'
     ? nvencStatus.h265
@@ -551,16 +758,6 @@ function ExportPanel() {
       hints.push('Enable Fast FFmpeg pipe to avoid PNG frame files.')
     }
     
-    const maskClips = clips.filter(clip => (clip.effects || []).some(effect => effect.type === 'mask' && effect.enabled))
-    const cachedMaskClips = maskClips.filter(clip => clip.cacheStatus === 'cached')
-    if (maskClips.length > 0) {
-      if (!settings.useCachedRenders) {
-        hints.push('Use cached renders to speed up masked clips.')
-      } else if (cachedMaskClips.length < maskClips.length) {
-        hints.push(`${maskClips.length - cachedMaskClips.length} masked clips are uncached. Render cache will speed exports.`)
-      }
-    }
-    
     const textClips = clips.filter(clip => clip.type === 'text')
     if (textClips.length > 0) {
       hints.push('Text overlays add compositing work; expect longer renders.')
@@ -627,9 +824,9 @@ function ExportPanel() {
       audioBitrateKbps: Number(jobSettings.audioBitrateKbps),
       audioSampleRate: Number(jobSettings.audioSampleRate),
       audioChannels: Number(jobSettings.audioChannels),
-      useCachedRenders: jobSettings.useCachedRenders,
+      useCachedRenders: false,
       useProxyMedia: jobSettings.useProxyMedia,
-      fastSeek: jobSettings.fastSeek,
+      fastSeek: false,
       useDirectFramePipe: jobSettings.useDirectFramePipe,
     }
 
@@ -724,7 +921,7 @@ function ExportPanel() {
   }
   
   return (
-    <div className="flex-1 flex flex-col min-w-0 bg-sf-dark-950">
+    <div className="flex-1 min-h-0 flex flex-col min-w-0 overflow-hidden bg-sf-dark-950">
       {/* Header */}
       <div className="h-12 flex items-center justify-between px-4 border-b border-sf-dark-700">
         <div className="flex items-center gap-2">
@@ -738,12 +935,56 @@ function ExportPanel() {
       </div>
       
       {/* Content */}
-      <div className="flex-1 min-h-0 grid grid-cols-12 gap-4 p-4">
+      <div className="flex-1 min-h-0 grid grid-cols-12 gap-4 overflow-hidden p-4">
         {/* Settings */}
-        <div className="col-span-7 flex flex-col min-h-0 bg-sf-dark-900 border border-sf-dark-700 rounded-lg p-3">
+        <div className="col-span-7 flex min-h-0 flex-col overflow-hidden bg-sf-dark-900 border border-sf-dark-700 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-3 shrink-0">
             <Settings className="w-4 h-4 text-sf-text-muted" />
             <span className="text-xs font-semibold text-sf-text-primary uppercase tracking-wider">Export Settings</span>
+            <span className="ml-auto text-[10px] text-sf-text-muted">Saved for this project</span>
+          </div>
+
+          <div className="mb-3 shrink-0 rounded-lg border border-sf-dark-700 bg-sf-dark-950/45 p-2">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">Export presets</div>
+                <div className="text-[10px] text-sf-text-secondary">
+                  Presets change render settings only. Filename and range stay as-is.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleResetSettings}
+                className="flex items-center gap-1 rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1 text-[10px] text-sf-text-muted transition-colors hover:border-sf-dark-500 hover:text-sf-text-primary"
+                title="Reset export settings to the default ComfyStudio export setup"
+              >
+                <RotateCcw className="h-3 w-3" />
+                Reset defaults
+              </button>
+            </div>
+            <div className="grid grid-cols-5 gap-2">
+              {EXPORT_PRESETS.map((exportPreset) => {
+                const isActive = activeExportPresetId === exportPreset.id
+                return (
+                  <button
+                    key={exportPreset.id}
+                    type="button"
+                    onClick={() => handleApplyExportPreset(exportPreset)}
+                    className={`rounded border p-2 text-left transition-colors ${
+                      isActive
+                        ? 'border-sf-accent bg-sf-accent/15 text-sf-text-primary'
+                        : 'border-sf-dark-700 bg-sf-dark-900 text-sf-text-secondary hover:border-sf-dark-500 hover:bg-sf-dark-800'
+                    }`}
+                    title={exportPreset.summary}
+                  >
+                    <div className="text-[11px] font-semibold">{exportPreset.label}</div>
+                    <div className="mt-1 text-[9px] leading-snug text-sf-text-muted">
+                      {exportPreset.summary}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
           </div>
           
           <div className="grid grid-cols-2 gap-3 shrink-0">
@@ -1072,17 +1313,6 @@ function ExportPanel() {
                 <div className="col-span-2">
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => handleSettingChange('useCachedRenders', !settings.useCachedRenders)}
-                      title="Use cached effect renders instead of re-compositing"
-                      className={`px-2 py-1 text-xs rounded border transition-colors ${
-                        settings.useCachedRenders
-                          ? 'bg-sf-accent/20 text-sf-accent border-sf-accent/40'
-                          : 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600'
-                      }`}
-                    >
-                      Use cached renders
-                    </button>
-                    <button
                       onClick={() => handleSettingChange('useProxyMedia', !settings.useProxyMedia)}
                       disabled={proxyCoverage.total === 0}
                       title={proxyCoverage.total === 0
@@ -1096,20 +1326,9 @@ function ExportPanel() {
                     >
                       Use video proxies
                     </button>
-                    <button
-                      onClick={() => handleSettingChange('fastSeek', !settings.fastSeek)}
-                      title="Fast seek jumps to keyframes for speed (less accurate)"
-                      className={`px-2 py-1 text-xs rounded border transition-colors ${
-                        settings.fastSeek
-                          ? 'bg-sf-accent/20 text-sf-accent border-sf-accent/40'
-                          : 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600'
-                      }`}
-                    >
-                      Fast seek (faster frame gen)
-                    </button>
                   </div>
                   <div className="mt-1 text-[10px] text-sf-text-muted">
-                    Cached renders reuse effect pre-renders. Video proxies use low-res proxy files when available. Fast seek trades accuracy for speed.
+                    Video proxies use low-res proxy files when available for faster draft exports.
                     {settings.useProxyMedia && proxyCoverage.total > 0 && (
                       <span className="ml-1 text-sf-accent">
                         {proxyCoverage.ready}/{proxyCoverage.total} ready.
@@ -1272,7 +1491,7 @@ function ExportPanel() {
         </div>
         
         {/* Queue */}
-        <div className="col-span-5 bg-sf-dark-900 border border-sf-dark-700 rounded-lg p-4 flex flex-col min-h-0">
+        <div className="col-span-5 bg-sf-dark-900 border border-sf-dark-700 rounded-lg p-4 flex min-h-0 flex-col overflow-hidden">
           <div className="flex items-center gap-2 mb-4">
             <Film className="w-4 h-4 text-sf-text-muted" />
             <span className="text-xs font-semibold text-sf-text-primary uppercase tracking-wider">Export Queue</span>

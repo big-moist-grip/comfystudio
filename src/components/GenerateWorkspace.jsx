@@ -70,6 +70,7 @@ import {
   YOLO_AD_REFERENCE_CONSISTENCY_OPTIONS,
   YOLO_AD_TALENT_MODE_OPTIONS,
   YOLO_CAMERA_PRESET_OPTIONS,
+  YOLO_MUSIC_KEYFRAME_WORKFLOW_OPTIONS,
   YOLO_MUSIC_VIDEO_WORKFLOW_OPTIONS,
   YOLO_MUSIC_PROFILES,
   YOLO_QUEUE_CONFIRM_THRESHOLD,
@@ -112,6 +113,13 @@ import {
   splitCastNameList,
 } from '../config/musicVideoShotConfig'
 import { TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID } from '../config/topazVideoUpscaleConfig'
+import {
+  buildShortFilmVideoPrompt,
+  ELEVENLABS_TTS_WORKFLOW_ID,
+  SHORT_FILM_DIALOGUE_VIDEO_WORKFLOW_ID,
+  SHORT_FILM_KEYFRAME_WORKFLOW_OPTIONS,
+  SHORT_FILM_VIDEO_WORKFLOW_ID,
+} from '../config/shortFilmConfig'
 
 const CATEGORY_ICONS = { video: Video, image: ImageIcon, audio: Music }
 const DIRECTOR_SUBTABS = [
@@ -141,6 +149,7 @@ const SINGLE_VIDEO_WORKFLOW_IDS = new Set([
   'wan22-i2v',
   'ltx23-i2v',
   'ltx23-ia2v',
+  SHORT_FILM_DIALOGUE_VIDEO_WORKFLOW_ID,
   'frame-interpolation',
   'kling-o3-i2v',
   'grok-video-i2v',
@@ -612,6 +621,8 @@ function getDirectorWorkflowShortToken(workflowId = '', stage = '') {
       return 'vidu'
     case MUSIC_VIDEO_SHOT_WORKFLOW_ID:
       return 'ltx23_audio'
+    case SHORT_FILM_DIALOGUE_VIDEO_WORKFLOW_ID:
+      return 'ltx23_dialogue'
     case 'nano-banana-2':
     case 'nano-banana-pro':
       return 'keyframe'
@@ -980,7 +991,7 @@ function buildMusicVideoNegativePrompt(baseNegativePrompt = '', shotType = '') {
  * the per-shot keyframe still. Built from the script's Keyframe prompt plus
  * shot-type-specific framing cues (close / wide / b-roll).
  *
- * This is the prompt the stills workflow (nano-banana-2 / z-image-turbo)
+ * This is the prompt the stills workflow (nano-banana-2 / Qwen image edit)
  * renders against; the artist reference image (if set) anchors identity.
  */
 function composeMusicShotReferencePrompt({
@@ -2691,6 +2702,16 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   })
   const [yoloMusicTargetDuration, setYoloMusicTargetDuration] = useState(persistedState?.yoloMusicTargetDuration || 30)
   const [yoloMusicQualityProfile, setYoloMusicQualityProfile] = useState(persistedState?.yoloMusicQualityProfile || 'balanced')
+  const [yoloMusicKeyframeWorkflowId, setYoloMusicKeyframeWorkflowId] = useState(() => {
+    const saved = String(persistedState?.yoloMusicKeyframeWorkflowId || '').trim()
+    if (saved === 'z-image-turbo') return 'image-edit'
+    if (YOLO_MUSIC_KEYFRAME_WORKFLOW_OPTIONS.some((option) => option.id === saved)) return saved
+    const legacyProfileId = String(persistedState?.yoloMusicQualityProfile || '').trim()
+    const legacyWorkflowId = String(YOLO_MUSIC_PROFILES[legacyProfileId]?.storyboardWorkflowId || '').trim()
+    if (YOLO_MUSIC_KEYFRAME_WORKFLOW_OPTIONS.some((option) => option.id === legacyWorkflowId)) return legacyWorkflowId
+    if (legacyProfileId === 'draft') return 'image-edit'
+    return 'nano-banana-2'
+  })
   const [yoloMusicVideoWorkflowId, setYoloMusicVideoWorkflowId] = useState(() => {
     const saved = String(persistedState?.yoloMusicVideoWorkflowId || '').trim()
     return YOLO_MUSIC_VIDEO_WORKFLOW_OPTIONS.some((option) => option.id === saved)
@@ -2932,6 +2953,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         yoloMusicCast,
         yoloMusicTargetDuration,
         yoloMusicQualityProfile,
+        yoloMusicKeyframeWorkflowId,
         yoloMusicVideoWorkflowId,
         yoloMusicPlan,
         yoloMusicPlanSignature,
@@ -3008,6 +3030,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicCast,
     yoloMusicTargetDuration,
     yoloMusicQualityProfile,
+    yoloMusicKeyframeWorkflowId,
     yoloMusicVideoWorkflowId,
     yoloMusicPlan,
     yoloMusicPlanSignature,
@@ -3105,7 +3128,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const activeWorkflowBrowserMode = generationMode === 'yolo' ? 'create' : 'generate'
   const visibleWorkflowManifests = useMemo(() => (
     GENERATE_WORKFLOW_CATALOG.filter((workflow) => (
-      workflow.mode === activeWorkflowBrowserMode && workflow.route === workflowRoute
+      workflow.mode === activeWorkflowBrowserMode
+        && (activeWorkflowBrowserMode === 'create'
+          ? workflow.route === 'local'
+          : workflow.route === workflowRoute)
     ))
   ), [activeWorkflowBrowserMode, workflowRoute])
   const selectedWorkflowManifest = useMemo(() => (
@@ -4135,7 +4161,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   }, [yoloMusicProfile?.videoWorkflowId, yoloMusicVideoWorkflowId])
   const yoloStoryboardWorkflowId = String(
     isYoloMusicMode
-      ? yoloMusicProfile?.storyboardWorkflowId
+      ? yoloMusicKeyframeWorkflowId || yoloMusicProfile?.storyboardWorkflowId
       : yoloAdStoryboardProfile?.storyboardWorkflowId
   ).trim()
   const yoloDefaultVideoWorkflowId = String(
@@ -4146,7 +4172,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         : yoloAdVideoProfile?.videoWorkflowId
   ).trim()
   const yoloStoryboardSupportsReferenceAnchors = useMemo(() => (
-    ['nano-banana-2', 'nano-banana-pro', 'image-edit-model-product', 'seedream-5-lite-image-edit'].includes(String(yoloStoryboardWorkflowId || '').trim())
+    ['image-edit', 'nano-banana-2', 'nano-banana-pro', 'image-edit-model-product', 'seedream-5-lite-image-edit'].includes(String(yoloStoryboardWorkflowId || '').trim())
   ), [yoloStoryboardWorkflowId])
   const yoloSelectedVideoWorkflowIds = useMemo(
     () => (yoloDefaultVideoWorkflowId ? [yoloDefaultVideoWorkflowId] : []),
@@ -5129,6 +5155,550 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     selectedWorkflowManifest?.title,
     wanQualityPreset,
     workflowId,
+  ])
+
+  const handleQueueShortFilmVoices = useCallback(async (payload = {}) => {
+    const {
+      dialogueLines = [],
+      characters = [],
+      title = 'Short Film',
+      voiceWorkflow = 'text_to_speech',
+    } = payload || {}
+
+    if (voiceWorkflow !== 'text_to_speech') {
+      const message = 'Only Text to Speech is wired right now. Text to Dialogue and Speech to Speech can be added after this first voice pass.'
+      setFormError(message)
+      return { queued: 0, skipped: 0, message }
+    }
+
+    const lines = (Array.isArray(dialogueLines) ? dialogueLines : [])
+      .map((line, index) => ({
+        ...line,
+        index,
+        text: String(line?.text || '').trim(),
+        slug: String(line?.slug || '').trim(),
+        speaker: String(line?.speaker || '').trim() || 'Character',
+        id: String(line?.id || `dialogue-${index + 1}`),
+      }))
+      .filter((line) => line.text)
+
+    if (lines.length === 0) {
+      const message = 'No dialogue lines found yet. Add CHARACTER: line dialogue in the script, then queue voices.'
+      setFormError(message)
+      return { queued: 0, skipped: 0, message }
+    }
+
+    if (!isConnected) {
+      const message = 'ComfyUI is not connected yet. Start ComfyUI, then queue voices.'
+      setFormError(message)
+      return { queued: 0, skipped: 0, message }
+    }
+
+    const depsOk = await validateDependenciesForQueue(
+      [ELEVENLABS_TTS_WORKFLOW_ID],
+      'short film voices'
+    )
+    if (!depsOk) {
+      return { queued: 0, skipped: 0, message: 'Voice queue blocked by missing ElevenLabs workflow requirements.' }
+    }
+
+    const characterBySlug = new Map()
+    for (const character of Array.isArray(characters) ? characters : []) {
+      if (character?.slug) characterBySlug.set(String(character.slug), character)
+    }
+
+    const activeLineIds = new Set(
+      generationQueue
+        .filter((job) => (
+          job?.workflowId === ELEVENLABS_TTS_WORKFLOW_ID &&
+          NON_TERMINAL_JOB_STATUSES.includes(job.status) &&
+          (!job?.shortFilm?.title || job.shortFilm.title === title) &&
+          job?.shortFilm?.dialogueId
+        ))
+        .map((job) => String(job.shortFilm.dialogueId))
+    )
+
+    let skipped = 0
+    const titleToken = slugifyNameToken(title, { fallback: 'short_film', maxLength: 24 })
+    const jobs = []
+    lines.forEach((line) => {
+      if (activeLineIds.has(line.id)) {
+        skipped += 1
+        return
+      }
+
+      const character = characterBySlug.get(line.slug) || null
+      const voicePreset = String(character?.voicePreset || '').trim() || 'Roger (male, american)'
+      const speakerToken = slugifyNameToken(line.speaker || line.slug, { fallback: 'character', maxLength: 18 })
+
+      jobs.push(createQueuedJob({
+        category: 'audio',
+        workflowId: ELEVENLABS_TTS_WORKFLOW_ID,
+        workflowLabel: 'Short Film Voices (ElevenLabs)',
+        needsImage: false,
+        inputAssetType: null,
+        inputAssetId: null,
+        inputAssetName: '',
+        prompt: line.text,
+        musicTags: `${line.speaker}: ${line.text}`,
+        duration: null,
+        fps: null,
+        resolution: null,
+        seed: Number(seed) + line.index + 1,
+        directorLabel: `${titleToken}_${speakerToken}_${line.index + 1}`,
+        elevenLabsTts: {
+          text: line.text,
+          voice: voicePreset,
+          stability: 0.5,
+          model: 'eleven_multilingual_v2',
+          speed: 1,
+          similarityBoost: 0.75,
+          useSpeakerBoost: false,
+          style: 0,
+          languageCode: '',
+          outputFormat: 'mp3_44100_192',
+        },
+        shortFilm: {
+          kind: 'dialogue-voice',
+          title,
+          dialogueId: line.id,
+          lineIndex: line.index,
+          speaker: line.speaker,
+          slug: line.slug,
+          text: line.text,
+          voicePreset,
+          workflow: voiceWorkflow,
+        },
+      }))
+    })
+
+    if (jobs.length === 0) {
+      const message = skipped > 0
+        ? 'Those voice lines are already queued or generating.'
+        : 'No voice jobs were queued.'
+      setFormError(message)
+      return { queued: 0, skipped, message }
+    }
+
+    setGenerationQueue((prev) => [...prev, ...jobs])
+    setFormError(null)
+    const message = `Queued ${jobs.length} voice line${jobs.length === 1 ? '' : 's'}${skipped > 0 ? ` (${skipped} already active)` : ''}.`
+    addComfyLog('status', `Short film voices queued: ${jobs.length} job${jobs.length === 1 ? '' : 's'}`)
+    return { queued: jobs.length, skipped, message }
+  }, [
+    addComfyLog,
+    createQueuedJob,
+    generationQueue,
+    isConnected,
+    seed,
+    validateDependenciesForQueue,
+  ])
+
+  const handleQueueShortFilmKeyframes = useCallback(async (payload = {}) => {
+    const {
+      shotPlan = [],
+      characters = [],
+      locations = [],
+      title = 'Short Film',
+      keyframeWorkflow = 'nano-banana-2',
+      resolution: keyframeResolution = null,
+    } = payload || {}
+
+    const workflow = String(keyframeWorkflow || '').trim()
+    const workflowOption = SHORT_FILM_KEYFRAME_WORKFLOW_OPTIONS.find((option) => option.id === workflow)
+      || SHORT_FILM_KEYFRAME_WORKFLOW_OPTIONS[0]
+    const workflowIdToUse = workflowOption.id
+    const shots = (Array.isArray(shotPlan) ? shotPlan : [])
+      .map((shot, index) => ({ ...shot, index }))
+      .filter((shot) => String(shot?.keyframe || '').trim())
+
+    if (shots.length === 0) {
+      const message = 'No planned shots found. Refresh the shot plan before creating keyframes.'
+      setFormError(message)
+      return { queued: 0, skipped: 0, missing: 0, message }
+    }
+
+    if (!isConnected) {
+      const message = 'ComfyUI is not connected yet. Start ComfyUI, then queue keyframes.'
+      setFormError(message)
+      return { queued: 0, skipped: 0, missing: 0, message }
+    }
+
+    const depsOk = await validateDependenciesForQueue(
+      [workflowIdToUse],
+      'short film keyframes'
+    )
+    if (!depsOk) {
+      return { queued: 0, skipped: 0, missing: 0, message: 'Keyframe queue blocked by missing workflow requirements.' }
+    }
+
+    const characterBySlug = new Map()
+    for (const character of Array.isArray(characters) ? characters : []) {
+      if (character?.slug) characterBySlug.set(String(character.slug), character)
+    }
+    const locationBySlug = new Map()
+    for (const location of Array.isArray(locations) ? locations : []) {
+      if (location?.slug) locationBySlug.set(String(location.slug), location)
+    }
+    const assetExists = (assetId) => Boolean(assetId && assets.some((asset) => asset?.id === assetId))
+    const firstExisting = (ids = []) => ids.find((assetId) => assetExists(assetId)) || ''
+    const getLocationReferenceId = (location) => firstExisting([
+      location?.heroAssetId,
+      location?.wideAssetId,
+      location?.reverseAssetId,
+      location?.detailAssetId,
+    ])
+    const buildPrompt = ({ shot, character, location, usesQwen }) => {
+      const parts = [
+        'Create one cinematic keyframe still for a short film shot.',
+        `Project: ${title}.`,
+        shot?.scene ? `Scene: ${shot.scene}.` : '',
+        shot?.title ? `Shot: ${shot.title}.` : '',
+        shot?.type ? `Shot type: ${shot.type}.` : '',
+        location?.name ? `Location: ${location.name}. ${location.description || ''}` : '',
+        character?.name ? `Character visible: ${character.name}. ${character.visualNotes || ''}` : '',
+        `Keyframe prompt: ${shot.keyframe}`,
+        usesQwen
+          ? 'Use the attached reference image as the visual anchor. Preserve identity, wardrobe, room geography, lighting continuity, and cinematic realism while creating the requested shot.'
+          : 'Use any attached references for character identity, wardrobe, and location continuity. Make it a production-ready opening frame for image-to-video.',
+        'No text overlays, captions, watermarks, logos, UI, or extra typography.',
+      ]
+      return parts.map((part) => String(part || '').trim()).filter(Boolean).join('\n')
+    }
+
+    const activeOrReadyShotIds = new Set()
+    for (const job of generationQueue || []) {
+      if (job?.shortFilm?.kind !== 'shot-keyframe') continue
+      if (job.shortFilm.title && job.shortFilm.title !== title) continue
+      if (job.status === 'error') continue
+      if (job?.shortFilm?.shotId) activeOrReadyShotIds.add(String(job.shortFilm.shotId))
+    }
+    for (const asset of assets || []) {
+      if (asset?.shortFilm?.title && asset.shortFilm.title !== title) continue
+      if (asset?.shortFilm?.kind === 'shot-keyframe' && asset.shortFilm.shotId) {
+        activeOrReadyShotIds.add(String(asset.shortFilm.shotId))
+      }
+    }
+
+    let skipped = 0
+    let missing = 0
+    const titleToken = slugifyNameToken(title, { fallback: 'short_film', maxLength: 24 })
+    const usesQwen = workflowIdToUse === 'image-edit'
+    const jobs = []
+    shots.forEach((shot) => {
+      const shotId = String(shot?.id || `shot-${shot.index + 1}`)
+      if (activeOrReadyShotIds.has(shotId)) {
+        skipped += 1
+        return
+      }
+
+      const character = characterBySlug.get(String(shot.characterSlug || '')) || null
+      const location = locationBySlug.get(String(shot.locationSlug || '')) || null
+      const characterReferenceId = assetExists(character?.referenceAssetId) ? character.referenceAssetId : ''
+      const locationReferenceId = getLocationReferenceId(location)
+      const primaryReferenceId = characterReferenceId || locationReferenceId
+
+      if (usesQwen && !primaryReferenceId) {
+        missing += 1
+        return
+      }
+
+      const referenceIds = [characterReferenceId, locationReferenceId]
+        .filter(Boolean)
+        .filter((assetId, index, arr) => arr.indexOf(assetId) === index)
+
+      const prompt = buildPrompt({ shot, character, location, usesQwen })
+      const shotToken = slugifyNameToken(shot.title || shotId, { fallback: 'shot', maxLength: 18 })
+      const outputResolution = {
+        width: Number(keyframeResolution?.width) || resolution.width,
+        height: Number(keyframeResolution?.height) || resolution.height,
+      }
+
+      jobs.push(createQueuedJob({
+        category: 'image',
+        workflowId: workflowIdToUse,
+        workflowLabel: `Short Film Keyframes (${workflowOption.label})`,
+        needsImage: usesQwen,
+        inputAssetType: usesQwen ? 'image' : null,
+        inputAssetId: usesQwen ? primaryReferenceId : null,
+        inputAssetName: '',
+        inputFromTimelineFrame: false,
+        prompt,
+        seed: Number(seed) + shot.index + 1,
+        resolution: outputResolution,
+        referenceAssetId1: usesQwen ? (referenceIds.find((assetId) => assetId !== primaryReferenceId) || null) : (referenceIds[0] || null),
+        referenceAssetId2: usesQwen ? null : (referenceIds[1] || null),
+        directorLabel: `${titleToken}_${shotToken}_${shot.index + 1}`,
+        shortFilm: {
+          kind: 'shot-keyframe',
+          title,
+          shotId,
+          shotIndex: shot.index,
+          shotTitle: shot.title || `Shot ${shot.index + 1}`,
+          shotType: shot.type || '',
+          locationSlug: shot.locationSlug || '',
+          characterSlug: shot.characterSlug || '',
+          dialogueId: shot.dialogueId || '',
+          workflow: workflowIdToUse,
+          sourceReferenceAssetId: usesQwen ? primaryReferenceId : '',
+          characterReferenceAssetId: characterReferenceId,
+          locationReferenceAssetId: locationReferenceId,
+          keyframePrompt: shot.keyframe,
+          motionPrompt: shot.motion || '',
+        },
+      }))
+    })
+
+    if (jobs.length === 0) {
+      const message = missing > 0 && usesQwen
+        ? `No keyframes queued. Qwen Image Edit needs a character or location reference image for each shot (${missing} missing).`
+        : skipped > 0
+          ? 'Those shot keyframes are already queued or ready.'
+          : 'No keyframe jobs were queued.'
+      setFormError(message)
+      return { queued: 0, skipped, missing, message }
+    }
+
+    const confirmed = await confirmLargeQueueBatch(jobs.length, 'short-film keyframe')
+    if (!confirmed) {
+      const message = 'Keyframe queue cancelled.'
+      setFormError(message)
+      return { queued: 0, skipped, missing, message }
+    }
+
+    setGenerationQueue((prev) => [...prev, ...jobs])
+    setFormError(missing > 0 ? `Queued ${jobs.length} keyframes (${missing} Qwen shots missing usable references).` : null)
+    const message = `Queued ${jobs.length} keyframe${jobs.length === 1 ? '' : 's'} with ${workflowOption.label}${skipped > 0 ? ` (${skipped} already ready/active)` : ''}${missing > 0 ? ` (${missing} missing references)` : ''}.`
+    addComfyLog('status', `Short film keyframes queued: ${jobs.length} job${jobs.length === 1 ? '' : 's'}`)
+    return { queued: jobs.length, skipped, missing, message }
+  }, [
+    addComfyLog,
+    assets,
+    confirmLargeQueueBatch,
+    createQueuedJob,
+    generationQueue,
+    isConnected,
+    resolution.height,
+    resolution.width,
+    seed,
+    validateDependenciesForQueue,
+  ])
+
+  const handleQueueShortFilmVideos = useCallback(async (payload = {}) => {
+    const {
+      shotPlan = [],
+      dialogueLines = [],
+      characters = [],
+      locations = [],
+      title = 'Short Film',
+      resolution: videoResolution = null,
+      fps: videoFps = 24,
+      shotIds = [],
+      promptOverrides = {},
+      force = false,
+    } = payload || {}
+
+    const targetShotIds = new Set(
+      (Array.isArray(shotIds) ? shotIds : [])
+        .map((shotId) => String(shotId || '').trim())
+        .filter(Boolean)
+    )
+    const shots = (Array.isArray(shotPlan) ? shotPlan : [])
+      .map((shot, index) => ({ ...shot, index }))
+      .filter((shot) => targetShotIds.size === 0 || targetShotIds.has(String(shot?.id || `shot-${shot.index + 1}`)))
+      .filter((shot) => String(shot?.motion || shot?.keyframe || '').trim())
+
+    if (shots.length === 0) {
+      const message = 'No planned shots found. Refresh the shot plan before creating videos.'
+      setFormError(message)
+      return { queued: 0, skipped: 0, missingKeyframes: 0, missingVoices: 0, message }
+    }
+
+    if (!isConnected) {
+      const message = 'ComfyUI is not connected yet. Start ComfyUI, then queue videos.'
+      setFormError(message)
+      return { queued: 0, skipped: 0, missingKeyframes: 0, missingVoices: 0, message }
+    }
+
+    const characterBySlug = new Map()
+    for (const character of Array.isArray(characters) ? characters : []) {
+      if (character?.slug) characterBySlug.set(String(character.slug), character)
+    }
+    const locationBySlug = new Map()
+    for (const location of Array.isArray(locations) ? locations : []) {
+      if (location?.slug) locationBySlug.set(String(location.slug), location)
+    }
+    const dialogueById = new Map()
+    for (const line of Array.isArray(dialogueLines) ? dialogueLines : []) {
+      if (line?.id) dialogueById.set(String(line.id), line)
+    }
+
+    const keyframeAssetByShotId = new Map()
+    const voiceAssetByDialogueId = new Map()
+    const activeOrReadyWorkflowIdsByShotId = new Map()
+    const markActiveOrReady = (shotId, workflowId) => {
+      const normalizedShotId = String(shotId || '')
+      if (!normalizedShotId) return
+      const normalizedWorkflowId = String(workflowId || '')
+      const workflowSet = activeOrReadyWorkflowIdsByShotId.get(normalizedShotId) || new Set()
+      workflowSet.add(normalizedWorkflowId)
+      activeOrReadyWorkflowIdsByShotId.set(normalizedShotId, workflowSet)
+    }
+    const hasActiveOrReady = (shotId, workflowId) => {
+      const workflowSet = activeOrReadyWorkflowIdsByShotId.get(String(shotId || ''))
+      if (!workflowSet) return false
+      return workflowSet.has(String(workflowId || '')) || workflowSet.has('')
+    }
+    for (const asset of assets || []) {
+      if (asset?.shortFilm?.title && asset.shortFilm.title !== title) continue
+      if (asset?.type === 'image' && asset?.shortFilm?.kind === 'shot-keyframe' && asset.shortFilm.shotId) {
+        keyframeAssetByShotId.set(String(asset.shortFilm.shotId), asset)
+      }
+      if (asset?.type === 'audio' && asset?.shortFilm?.kind === 'dialogue-voice' && asset.shortFilm.dialogueId) {
+        voiceAssetByDialogueId.set(String(asset.shortFilm.dialogueId), asset)
+      }
+      if (asset?.type === 'video' && asset?.shortFilm?.kind === 'shot-video' && asset.shortFilm.shotId) {
+        markActiveOrReady(asset.shortFilm.shotId, asset.shortFilm.workflow)
+      }
+    }
+    for (const job of generationQueue || []) {
+      if (job?.shortFilm?.kind !== 'shot-video') continue
+      if (job.shortFilm.title && job.shortFilm.title !== title) continue
+      if (job.status === 'error') continue
+      if (job?.shortFilm?.shotId) markActiveOrReady(job.shortFilm.shotId, job.workflowId || job.shortFilm.workflow)
+    }
+
+    const outputResolution = {
+      width: Number(videoResolution?.width) || resolution.width,
+      height: Number(videoResolution?.height) || resolution.height,
+    }
+    const numericFps = Math.max(1, Math.round(Number(videoFps) || 24))
+    const titleToken = slugifyNameToken(title, { fallback: 'short_film', maxLength: 24 })
+
+    let skipped = 0
+    let missingKeyframes = 0
+    let missingVoices = 0
+    const jobs = []
+    for (const shot of shots) {
+      const shotId = String(shot?.id || `shot-${shot.index + 1}`)
+      const keyframeAsset = keyframeAssetByShotId.get(shotId)
+      if (!keyframeAsset) {
+        missingKeyframes += 1
+        continue
+      }
+
+      const dialogue = shot.dialogueId ? dialogueById.get(String(shot.dialogueId)) : null
+      const voiceAsset = shot.dialogueId ? voiceAssetByDialogueId.get(String(shot.dialogueId)) : null
+      if (shot.dialogueId && !voiceAsset) {
+        missingVoices += 1
+        continue
+      }
+
+      const character = characterBySlug.get(String(shot.characterSlug || dialogue?.slug || '')) || null
+      const location = locationBySlug.get(String(shot.locationSlug || '')) || null
+      const usesAudio = Boolean(voiceAsset)
+      const workflowIdToUse = usesAudio ? SHORT_FILM_DIALOGUE_VIDEO_WORKFLOW_ID : SHORT_FILM_VIDEO_WORKFLOW_ID
+      if (!force && hasActiveOrReady(shotId, workflowIdToUse)) {
+        skipped += 1
+        continue
+      }
+      const shotToken = slugifyNameToken(shot.title || shotId, { fallback: 'shot', maxLength: 18 })
+      const durationSeconds = Math.max(2, Math.min(8, Number(shot.duration) || 4))
+      const promptOverride = String(promptOverrides?.[shotId] || '').trim()
+      const prompt = promptOverride || buildShortFilmVideoPrompt({
+        title,
+        shot,
+        character,
+        location,
+        dialogue,
+        usesAudio,
+      })
+
+      jobs.push(createQueuedJob({
+        category: 'video',
+        workflowId: workflowIdToUse,
+        workflowLabel: usesAudio ? 'Short Film Videos (LTX 2.3 + Audio)' : 'Short Film Videos (LTX 2.3)',
+        needsImage: true,
+        inputAssetType: 'image',
+        inputAssetId: keyframeAsset.id,
+        inputAssetName: keyframeAsset.name || '',
+        audioAssetId: usesAudio ? voiceAsset.id : null,
+        audioAssetName: usesAudio ? (voiceAsset.name || '') : '',
+        prompt,
+        negativePrompt: 'low quality, blurry, distorted face, warped hands, changing identity, captions, subtitles, watermark, logo, text overlay',
+        seed: Number(seed) + 1000 + shot.index + 1,
+        duration: durationSeconds,
+        fps: numericFps,
+        resolution: outputResolution,
+        directorLabel: `${titleToken}_${shotToken}_${shot.index + 1}`,
+        shortFilm: {
+          kind: 'shot-video',
+          title,
+          shotId,
+          shotIndex: shot.index,
+          shotTitle: shot.title || `Shot ${shot.index + 1}`,
+          shotType: shot.type || '',
+          locationSlug: shot.locationSlug || '',
+          characterSlug: shot.characterSlug || dialogue?.slug || '',
+          dialogueId: shot.dialogueId || '',
+          dialogueText: dialogue?.text || '',
+          workflow: workflowIdToUse,
+          promptFormat: usesAudio ? 'ltx23-structured-speech' : 'plain-motion',
+          customPrompt: Boolean(promptOverride),
+          keyframeAssetId: keyframeAsset.id,
+          voiceAssetId: usesAudio ? voiceAsset.id : '',
+          keyframePrompt: shot.keyframe || '',
+          motionPrompt: shot.motion || '',
+        },
+      }))
+    }
+
+    if (jobs.length === 0) {
+      const message = missingKeyframes > 0
+        ? `No videos queued. ${missingKeyframes} shot${missingKeyframes === 1 ? ' needs' : 's need'} keyframes first.`
+        : missingVoices > 0
+          ? `No videos queued. ${missingVoices} dialogue shot${missingVoices === 1 ? ' needs' : 's need'} voice audio first.`
+          : skipped > 0
+            ? 'Those shot videos are already queued or ready.'
+            : 'No video jobs were queued.'
+      setFormError(message)
+      return { queued: 0, skipped, missingKeyframes, missingVoices, message }
+    }
+
+    const workflowIdsToValidate = Array.from(new Set(jobs.map((job) => job.workflowId)))
+    const depsOk = await validateDependenciesForQueue(workflowIdsToValidate, 'short film videos')
+    if (!depsOk) {
+      return { queued: 0, skipped, missingKeyframes, missingVoices, message: 'Video queue blocked by missing workflow requirements.' }
+    }
+
+    const confirmed = await confirmLargeQueueBatch(jobs.length, 'short-film video')
+    if (!confirmed) {
+      const message = 'Video queue cancelled.'
+      setFormError(message)
+      return { queued: 0, skipped, missingKeyframes, missingVoices, message }
+    }
+
+    setGenerationQueue((prev) => [...prev, ...jobs])
+    const detail = [
+      skipped > 0 ? `${skipped} already ready/active` : '',
+      missingKeyframes > 0 ? `${missingKeyframes} missing keyframes` : '',
+      missingVoices > 0 ? `${missingVoices} missing voices` : '',
+    ].filter(Boolean)
+    setFormError(detail.length > 0 ? `Queued ${jobs.length} videos (${detail.join(', ')}).` : null)
+    const message = `Queued ${jobs.length} LTX 2.3 video${jobs.length === 1 ? '' : 's'}${detail.length > 0 ? ` (${detail.join(', ')})` : ''}.`
+    addComfyLog('status', `Short film videos queued: ${jobs.length} job${jobs.length === 1 ? '' : 's'}`)
+    return { queued: jobs.length, skipped, missingKeyframes, missingVoices, message }
+  }, [
+    addComfyLog,
+    assets,
+    confirmLargeQueueBatch,
+    createQueuedJob,
+    generationQueue,
+    isConnected,
+    resolution.height,
+    resolution.width,
+    seed,
+    validateDependenciesForQueue,
   ])
 
   const normalizeGeneratedYoloPlan = useCallback((rawPlan = [], options = {}) => (
@@ -6318,13 +6888,24 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       return Number.isFinite(parsed) ? parsed : fallback
     }
     const usesModelProductStoryboardWorkflow = yoloStoryboardWorkflowId === 'image-edit-model-product'
+    const usesQwenMusicStoryboardWorkflow = isYoloMusicMode && yoloStoryboardWorkflowId === 'image-edit'
+    if (usesQwenMusicStoryboardWorkflow) {
+      const missingReference = variantsToQueue.some((variant) => !(
+        variant?.resolvedArtistAssetIds?.[0] ||
+        yoloMusicArtistAsset?.id
+      ))
+      if (missingReference) {
+        setFormError('Qwen Image Edit keyframes need a cast/reference image. Add at least one person in the Music Video People step, or switch keyframes to Nano Banana 2.')
+        return 0
+      }
+    }
     const effectiveAdProductAsset = productAssetIdOverride !== undefined
       ? (assets.find((asset) => asset?.id === productAssetIdOverride) || null)
       : yoloAdProductAsset
     const effectiveAdModelAsset = modelAssetIdOverride !== undefined
       ? (assets.find((asset) => asset?.id === modelAssetIdOverride) || null)
       : yoloAdModelAsset
-    const storyboardInputAsset = usesModelProductStoryboardWorkflow
+    const adStoryboardInputAsset = usesModelProductStoryboardWorkflow
       ? (effectiveAdModelAsset || effectiveAdProductAsset || null)
       : null
     const storyboardResolution = {
@@ -6347,32 +6928,40 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             ? mediumSeed
             : softSeed
       )
+      const musicReferenceAssetId1 = isYoloMusicMode
+        ? (variant.resolvedArtistAssetIds?.[0] || yoloMusicArtistAsset?.id || null)
+        : null
+      const musicReferenceAssetId2 = isYoloMusicMode
+        ? (variant.resolvedArtistAssetIds?.[1] || null)
+        : null
+      const qwenMusicInputAsset = usesQwenMusicStoryboardWorkflow && musicReferenceAssetId1
+        ? (assets.find((asset) => asset?.id === musicReferenceAssetId1) || null)
+        : null
+      const storyboardInputAsset = usesModelProductStoryboardWorkflow
+        ? adStoryboardInputAsset
+        : qwenMusicInputAsset
+      const storyboardReferenceAssetId1 = isYoloMusicMode
+        ? (usesQwenMusicStoryboardWorkflow ? musicReferenceAssetId2 : musicReferenceAssetId1)
+        : (effectiveAdProductAsset?.id || null)
+      const storyboardReferenceAssetId2 = isYoloMusicMode
+        ? (usesQwenMusicStoryboardWorkflow ? null : musicReferenceAssetId2)
+        : (effectiveAdModelAsset?.id || null)
       return createQueuedJob({
         category: 'image',
         workflowId: yoloStoryboardWorkflowId,
         workflowLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Keyframe (${yoloStoryboardWorkflowId})`,
-        needsImage: usesModelProductStoryboardWorkflow,
+        needsImage: usesModelProductStoryboardWorkflow || Boolean(qwenMusicInputAsset),
         prompt: variant.storyboardPrompt || variant.prompt,
         seed: storyboardSeed,
         resolution: storyboardResolution,
         inputAssetId: storyboardInputAsset?.id || null,
         inputAssetName: storyboardInputAsset?.name || '',
         inputFromTimelineFrame: false,
-        // Music mode routes the resolved per-shot artist reference(s) into
-        // slots 1/2 (the same slots ads use for product/model). The planner
-        // resolved these from cast + script Artist: override + lyric [Name]
-        // tags. If a shot has no resolved cast member (empty roster or fully
-        // unresolved), we fall back to the legacy single-artist asset. If
-        // that's unset too, the storyboard runs reference-free.
-        //
-        // z-image-turbo ignores references silently — a warning is surfaced
-        // in the Script tab when an artist is picked with that workflow.
-        referenceAssetId1: isYoloMusicMode
-          ? (variant.resolvedArtistAssetIds?.[0] || yoloMusicArtistAsset?.id || null)
-          : (effectiveAdProductAsset?.id || null),
-        referenceAssetId2: isYoloMusicMode
-          ? (variant.resolvedArtistAssetIds?.[1] || null)
-          : (effectiveAdModelAsset?.id || null),
+        // Music mode routes resolved cast refs from Artist: overrides and
+        // lyric [Name] tags. Qwen uses the first cast image as the primary
+        // edit input, so only additional cast images go into reference slots.
+        referenceAssetId1: storyboardReferenceAssetId1,
+        referenceAssetId2: storyboardReferenceAssetId2,
         directorLabel: yoloQueueNameLabel,
         yolo: {
           mode: yoloModeKey,
@@ -7612,6 +8201,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     const jobTags = job?.musicTags || ''
     const autoName = generateName(jobPrompt || jobTags || wfId)
     const directorMeta = job?.yolo && typeof job.yolo === 'object' ? { ...job.yolo } : null
+    const shortFilmMeta = job?.shortFilm && typeof job.shortFilm === 'object' ? { ...job.shortFilm } : null
     const resolvedName = directorMeta
       ? buildDirectorAssetDisplayName(directorMeta, job?.workflowId || wfId)
       : autoName
@@ -7655,6 +8245,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         addComfyLog('status', `Skipped duplicate video import: ${result.filename}`)
         return { didImportAny: false, importedAssets }
       }
+      const shortFilmVideoName = shortFilmMeta?.kind === 'shot-video'
+        ? `VID ${String((Number(shortFilmMeta.shotIndex) || 0) + 1).padStart(2, '0')} - ${shortFilmMeta.shotTitle || 'Shot'}`
+        : ''
       const generatedVideoFolderPath = generatedFolderPath('video')
       const generatedVideoFolderId = importsIntoActiveProject ? ensureAssetFolderPath(generatedVideoFolderPath) : null
       try {
@@ -7663,12 +8256,13 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         const blobUrl = importsIntoActiveProject ? URL.createObjectURL(videoFile) : null
         const newAsset = await saveImportedAssetRecord({
           ...assetInfo,
-          name: resolvedName,
+          name: shortFilmVideoName || resolvedName,
           type: 'video',
           url: blobUrl,
           prompt: jobPrompt,
           isImported: true,
           yolo: directorMeta || undefined,
+          shortFilm: shortFilmMeta || undefined,
           folderId: generatedVideoFolderId,
           settings: {
             duration: jobDuration,
@@ -7691,11 +8285,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         // Fallback: use ComfyUI URL
         const url = comfyui.getMediaUrl(result.filename, result.subfolder, result.outputType)
         const fallbackAsset = addAsset({
-          name: resolvedName,
+          name: shortFilmVideoName || resolvedName,
           type: 'video',
           url,
           prompt: jobPrompt,
           yolo: directorMeta || undefined,
+          shortFilm: shortFilmMeta || undefined,
           folderId: generatedVideoFolderId,
           settings: { duration: jobDuration, fps: jobFps, seed: jobSeed }
         })
@@ -7724,6 +8319,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       if (job?.workflowId === 'multi-angles' || job?.workflowId === 'multi-angles-scene') {
         imageItems = imageItems.slice(0, 8)
       }
+      const shortFilmKeyframeName = shortFilmMeta?.kind === 'shot-keyframe'
+        ? `KF ${String((Number(shortFilmMeta.shotIndex) || 0) + 1).padStart(2, '0')} - ${shortFilmMeta.shotTitle || 'Shot'}`
+        : ''
       for (let imageIndex = 0; imageIndex < imageItems.length; imageIndex += 1) {
         const img = imageItems[imageIndex]
         if (markImportedSignature('image', img.filename, img.subfolder, img.outputType)) continue
@@ -7734,7 +8332,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           const imageFile = await comfyui.downloadImage(img.filename, img.subfolder, img.outputType)
           const assetInfo = await importAsset(targetProjectHandle, imageFile, 'images')
           const blobUrl = importsIntoActiveProject ? URL.createObjectURL(imageFile) : null
-          const imageName = imageItems.length > 1 ? `${resolvedName}_I${imageIndex + 1}` : resolvedName
+          const baseImageName = shortFilmKeyframeName || resolvedName
+          const imageName = imageItems.length > 1 ? `${baseImageName}_I${imageIndex + 1}` : baseImageName
           const newAsset = await saveImportedAssetRecord({
             ...assetInfo,
             name: imageName,
@@ -7743,6 +8342,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             prompt: jobPrompt,
             isImported: true,
             yolo: directorMeta || undefined,
+            shortFilm: shortFilmMeta || undefined,
             folderId: generatedImageFolderId,
           }, generatedImageFolderPath)
           if (newAsset) importedAssets.push(newAsset)
@@ -7751,13 +8351,15 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           console.warn('Failed to save image:', err)
           if (!importsIntoActiveProject) throw err
           const url = comfyui.getMediaUrl(img.filename, img.subfolder, img.outputType)
-          const imageName = imageItems.length > 1 ? `${resolvedName}_I${imageIndex + 1}` : resolvedName
+          const baseImageName = shortFilmKeyframeName || resolvedName
+          const imageName = imageItems.length > 1 ? `${baseImageName}_I${imageIndex + 1}` : baseImageName
           const fallbackAsset = addAsset({
             name: imageName,
             type: 'image',
             url,
             prompt: jobPrompt,
             yolo: directorMeta || undefined,
+            shortFilm: shortFilmMeta || undefined,
             folderId: generatedImageFolderId,
           })
           if (fallbackAsset) importedAssets.push(fallbackAsset)
@@ -7771,6 +8373,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       }
       const generatedAudioFolderPath = generatedFolderPath('audio')
       const generatedAudioFolderId = importsIntoActiveProject ? ensureAssetFolderPath(generatedAudioFolderPath) : null
+      const shortFilmVoiceName = shortFilmMeta?.kind === 'dialogue-voice'
+        ? `VO ${String((Number(shortFilmMeta.lineIndex) || 0) + 1).padStart(2, '0')} - ${shortFilmMeta.speaker || 'Character'}`
+        : ''
       try {
         const url = comfyui.getMediaUrl(result.filename, result.subfolder, result.outputType)
         const resp = await fetch(url)
@@ -7780,13 +8385,14 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         const blobUrl = importsIntoActiveProject ? URL.createObjectURL(file) : null
         const newAsset = await saveImportedAssetRecord({
           ...assetInfo,
-          name: autoName,
+          name: shortFilmVoiceName || autoName,
           type: 'audio',
           url: blobUrl,
-          prompt: jobTags,
+          prompt: jobPrompt || jobTags,
           isImported: true,
+          shortFilm: shortFilmMeta || undefined,
           folderId: generatedAudioFolderId,
-          settings: { duration: job?.musicDuration, bpm: job?.bpm, keyscale: job?.keyscale }
+          settings: { duration: job?.musicDuration, bpm: job?.bpm, keyscale: job?.keyscale, voice: shortFilmMeta?.voicePreset }
         }, generatedAudioFolderPath)
         if (newAsset) importedAssets.push(newAsset)
         didImportAny = true
@@ -7795,10 +8401,11 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         if (!importsIntoActiveProject) throw err
         const url = comfyui.getMediaUrl(result.filename, result.subfolder, result.outputType)
         const fallbackAsset = addAsset({
-          name: autoName,
+          name: shortFilmVoiceName || autoName,
           type: 'audio',
           url,
-          prompt: jobTags,
+          prompt: jobPrompt || jobTags,
+          shortFilm: shortFilmMeta || undefined,
           folderId: generatedAudioFolderId,
           settings: { duration: job?.musicDuration, bpm: job?.bpm },
         })
@@ -7996,7 +8603,11 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             job.workflowId === 'nano-banana-pro'
           )
             ? `image/comfystudio_${outputToken}`
-            : (job.workflowId === 'sonilo-v2m' ? `audio/comfystudio_${outputToken}` : '')
+            : (
+              job.workflowId === 'sonilo-v2m' || job.workflowId === ELEVENLABS_TTS_WORKFLOW_ID
+                ? `audio/comfystudio_${outputToken}`
+                : ''
+            )
       )
 
       if (job.promptId) {
@@ -8081,7 +8692,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       let uploadedAudioFilename = null
       const audioUploadAssetId = job.workflowId === MUSIC_VIDEO_SHOT_WORKFLOW_ID
         ? job.musicAudioAssetId
-        : (job.workflowId === 'ltx23-ia2v' ? job.audioAssetId : null)
+        : (job.workflowId === 'ltx23-ia2v' || job.workflowId === SHORT_FILM_DIALOGUE_VIDEO_WORKFLOW_ID ? job.audioAssetId : null)
       if (audioUploadAssetId) {
         const audioAsset = findJobAsset(audioUploadAssetId, 'audio')
         if (!audioAsset) {
@@ -8186,6 +8797,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         modifyKlingO3I2VWorkflow,
         modifyMusicWorkflow,
         modifyMusicVideoShotWorkflow,
+        modifyElevenLabsTextToSpeechWorkflow,
         modifyLocalApiWorkflow,
         modifyFrameInterpolationWorkflow,
         modifyTopazVideoUpscaleWorkflow,
@@ -8221,6 +8833,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           })
           break
         case 'ltx23-ia2v':
+        case SHORT_FILM_DIALOGUE_VIDEO_WORKFLOW_ID:
           modifiedWorkflow = modifyLTX23IA2VWorkflow(workflowJson, {
             prompt: job.prompt,
             negativePrompt: job.negativePrompt,
@@ -8231,7 +8844,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             duration: job.duration,
             fps: job.fps,
             seed: job.seed,
-            filenamePrefix: outputPrefix || 'video/ltx23_ia2v',
+            filenamePrefix: outputPrefix || (job.workflowId === SHORT_FILM_DIALOGUE_VIDEO_WORKFLOW_ID ? 'video/short_film_dialogue_ltx23' : 'video/ltx23_ia2v'),
           })
           break
         case 'frame-interpolation':
@@ -8445,6 +9058,15 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             bpm: job.bpm,
             seed: job.seed,
             keyscale: job.keyscale,
+          })
+          break
+        case ELEVENLABS_TTS_WORKFLOW_ID:
+          modifiedWorkflow = modifyElevenLabsTextToSpeechWorkflow(workflowJson, {
+            ...(job.elevenLabsTts || {}),
+            text: job.elevenLabsTts?.text || job.prompt,
+            voice: job.elevenLabsTts?.voice || job.shortFilm?.voicePreset,
+            seed: job.seed,
+            filenamePrefix: outputPrefix || 'audio/short_film_voice',
           })
           break
         default:
@@ -9254,6 +9876,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     workflows={visibleWorkflowManifests}
                     selectedWorkflowId={selectedWorkflowManifest?.id || ''}
                     route={workflowRoute}
+                    variant="create-launcher"
                     onRouteChange={handleWorkflowRouteChange}
                     onSelectWorkflow={handleWorkflowManifestSelect}
                   />
@@ -9332,6 +9955,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     setYoloMusicScript={setYoloMusicScript}
                     yoloMusicCast={yoloMusicCast}
                     yoloMusicResolvedCast={yoloMusicResolvedCast}
+                    yoloMusicKeyframeWorkflowId={yoloStoryboardWorkflowId}
+                    setYoloMusicKeyframeWorkflowId={setYoloMusicKeyframeWorkflowId}
+                    yoloMusicKeyframeWorkflowOptions={YOLO_MUSIC_KEYFRAME_WORKFLOW_OPTIONS}
                     yoloMusicVideoWorkflowId={yoloDefaultVideoWorkflowId}
                     setYoloMusicVideoWorkflowId={setYoloMusicVideoWorkflowId}
                     yoloMusicVideoWorkflowOptions={YOLO_MUSIC_VIDEO_WORKFLOW_OPTIONS}
@@ -9364,6 +9990,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                 ) : isYoloShortFilmMode ? (
                   <ShortFilmEasyMode
                     assets={assets}
+                    generationQueue={generationQueue}
+                    onQueueVoices={handleQueueShortFilmVoices}
+                    onQueueKeyframes={handleQueueShortFilmKeyframes}
+                    onQueueVideos={handleQueueShortFilmVideos}
                     setYoloVideoFps={setYoloVideoFps}
                     setResolution={setResolution}
                     setImageResolution={setImageResolution}
@@ -9686,15 +10316,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                             <div>
                               Reference cast in your script with <span className="font-mono text-sf-text-secondary">Artist: rose</span>, <span className="font-mono text-sf-text-secondary">Artist: jake</span>, or <span className="font-mono text-sf-text-secondary">Artist: both</span> (also <span className="font-mono">all</span> / <span className="font-mono">band</span>). In lyrics, drop a tag line above the verse: <span className="font-mono text-sf-text-secondary">[Rose]</span>, <span className="font-mono text-sf-text-secondary">[Jake]</span>, <span className="font-mono text-sf-text-secondary">[Rose, Jake]</span>. Section markers like <span className="font-mono">[Chorus]</span> and <span className="font-mono">[Verse 1]</span> are ignored.
                             </div>
-                            <div className="mt-1">
-                              Works best with storyboard workflows that accept references (e.g. nano-banana-2). z-image-turbo ignores references — switch in the Setup tab if you need identity lock.
-                            </div>
                           </div>
-                          {yoloMusicResolvedCast.length > 0 && yoloStoryboardWorkflowId === 'z-image-turbo' && (
-                            <div className="mt-1 text-[10px] text-yellow-400">
-                              Heads up: z-image-turbo does not accept reference images, so cast references will be ignored during the keyframe pass. Pick nano-banana-2 or image-edit-model-product in the Setup tab to lock identity.
-                            </div>
-                          )}
                         </div>
 
                         <div>

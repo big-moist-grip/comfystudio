@@ -1,9 +1,10 @@
 import { Play } from 'lucide-react'
 
-export default function WorkflowCard({ workflow, selected = false, onSelect }) {
+export default function WorkflowCard({ workflow, selected = false, onSelect, showRouteBadge = true }) {
   if (!workflow) return null
 
   const coverIsVideo = /\.(mp4|webm|mov)(\?|#|$)/i.test(String(workflow.cover || ''))
+  const coverPosition = workflow.coverPosition || 'center'
   const routeClass = workflow.route === 'cloud'
     ? 'bg-fuchsia-400/15 text-fuchsia-200 border-fuchsia-300/25'
     : 'bg-emerald-400/15 text-emerald-200 border-emerald-300/25'
@@ -21,6 +22,7 @@ export default function WorkflowCard({ workflow, selected = false, onSelect }) {
           <video
             src={workflow.cover}
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+            style={{ objectPosition: coverPosition }}
             autoPlay
             muted
             loop
@@ -31,6 +33,7 @@ export default function WorkflowCard({ workflow, selected = false, onSelect }) {
             src={workflow.cover}
             alt=""
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+            style={{ objectPosition: coverPosition }}
           />
         ) : (
           <div className="flex h-full items-center justify-center text-xs text-sf-text-muted">
@@ -38,10 +41,12 @@ export default function WorkflowCard({ workflow, selected = false, onSelect }) {
           </div>
         )}
         <div className="absolute inset-0 bg-gradient-to-b from-black/35 via-transparent to-black/65" />
-        <span className={`absolute left-2 top-2 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${routeClass}`}>
-          <span className={`h-1.5 w-1.5 rounded-full ${workflow.route === 'cloud' ? 'bg-fuchsia-300' : 'bg-emerald-300'}`} />
-          {workflow.route === 'cloud' ? 'Cloud' : 'Local'}
-        </span>
+        {showRouteBadge && (
+          <span className={`absolute left-2 top-2 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${routeClass}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${workflow.route === 'cloud' ? 'bg-fuchsia-300' : 'bg-emerald-300'}`} />
+            {workflow.route === 'cloud' ? 'Cloud' : 'Local'}
+          </span>
+        )}
         <span className="absolute bottom-2 right-2 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur">
           {workflow.badge || workflow.provider}
         </span>

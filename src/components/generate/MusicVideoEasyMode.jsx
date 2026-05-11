@@ -38,7 +38,6 @@ const ASPECT_RATIO_OPTIONS = [
 const RESOLUTION_OPTIONS = [
   { id: '720p', label: '720p' },
   { id: '1080p', label: '1080p' },
-  { id: '2k', label: '2K' },
 ]
 
 const FPS_OPTIONS = [24, 25, 30]
@@ -91,6 +90,20 @@ const DEFAULT_VIDEO_WORKFLOW_OPTIONS = Object.freeze([
     description: 'Alternate animation pass. Strong physical motion, no song-audio lip-sync conditioning.',
   },
 ])
+const DEFAULT_KEYFRAME_WORKFLOW_OPTIONS = Object.freeze([
+  {
+    id: 'image-edit',
+    label: 'Qwen Image Edit',
+    runtimeLabel: 'Local',
+    description: 'Fully local keyframes using Qwen Image Edit 2509. Uses the resolved cast/reference image as the edit source.',
+  },
+  {
+    id: 'nano-banana-2',
+    label: 'Nano Banana 2',
+    runtimeLabel: 'Cloud',
+    description: 'Cloud keyframes with stronger reference-image and identity consistency.',
+  },
+])
 const JOB_BUSY_STATUSES = new Set(['queued', 'paused', 'uploading', 'configuring', 'queuing', 'running', 'saving'])
 const JOB_ERROR_STATUSES = new Set(['failed', 'error', 'cancelled', 'canceled'])
 
@@ -109,6 +122,12 @@ const DEFAULT_DRAFT = Object.freeze({
 function normalizeDraftOption(value, options, fallback) {
   const normalized = String(value || '').trim()
   return options.some((option) => option?.id === normalized) ? normalized : fallback
+}
+
+function normalizeResolutionPreset(value) {
+  const normalized = String(value || '').trim()
+  if (normalized === '2k') return '1080p'
+  return normalizeDraftOption(normalized, RESOLUTION_OPTIONS, DEFAULT_DRAFT.resolutionPreset)
 }
 
 function normalizeDraftNumber(value, allowedValues, fallback) {
@@ -142,7 +161,7 @@ function loadDraft() {
     return {
       step: normalizeDraftStep(parsed.step),
       aspectRatio: normalizeDraftOption(parsed.aspectRatio, ASPECT_RATIO_OPTIONS, DEFAULT_DRAFT.aspectRatio),
-      resolutionPreset: normalizeDraftOption(parsed.resolutionPreset, RESOLUTION_OPTIONS, DEFAULT_DRAFT.resolutionPreset),
+      resolutionPreset: normalizeResolutionPreset(parsed.resolutionPreset),
       videoFps: normalizeDraftNumber(parsed.videoFps, FPS_OPTIONS, DEFAULT_DRAFT.videoFps),
       coveragePreset: normalizeCoveragePreset(parsed.coveragePreset),
       performancePassCount: normalizeDraftNumber(parsed.performancePassCount, PERFORMANCE_PASS_OPTIONS, DEFAULT_DRAFT.performancePassCount),
@@ -176,16 +195,7 @@ function getShotTypeId(shot) {
 }
 
 function resolveOutputResolution(aspectRatio, resolutionPreset) {
-  if (resolutionPreset === '2k') {
-    if (aspectRatio === 'vertical_9x16') {
-      return { width: 1152, height: 2048 }
-    }
-    if (aspectRatio === 'square_1x1') {
-      return { width: 2048, height: 2048 }
-    }
-    return { width: 2048, height: 1152 }
-  }
-  const is1080 = resolutionPreset === '1080p'
+  const is1080 = (resolutionPreset === '2k' ? '1080p' : resolutionPreset) === '1080p'
   if (aspectRatio === 'vertical_9x16') {
     return is1080 ? { width: 1080, height: 1920 } : { width: 720, height: 1280 }
   }
@@ -195,13 +205,16 @@ function resolveOutputResolution(aspectRatio, resolutionPreset) {
   return is1080 ? { width: 1920, height: 1080 } : { width: 1280, height: 720 }
 }
 
-function workflowSupports2kResolution(workflowId) {
+function workflowSupports1080Resolution(workflowId) {
   return String(workflowId || '').trim() === MUSIC_VIDEO_SHOT_WORKFLOW_ID
 }
 
 function getResolutionFallbackForWorkflow(workflowId, resolutionPreset) {
-  if (workflowSupports2kResolution(workflowId)) return resolutionPreset
-  return resolutionPreset === '720p' ? resolutionPreset : '720p'
+  const normalizedPreset = resolutionPreset === '2k' ? '1080p' : resolutionPreset
+  if (workflowSupports1080Resolution(workflowId)) {
+    return normalizedPreset === '1080p' ? '1080p' : '720p'
+  }
+  return '720p'
 }
 
 function formatResolutionLabel(resolution) {
@@ -335,6 +348,9 @@ export default function MusicVideoEasyMode({
   handleYoloMusicCastSlugChange,
   handleYoloMusicCastLabelChange,
   handleYoloMusicCastRoleChange,
+  yoloMusicKeyframeWorkflowId = 'nano-banana-2',
+  setYoloMusicKeyframeWorkflowId,
+  yoloMusicKeyframeWorkflowOptions = DEFAULT_KEYFRAME_WORKFLOW_OPTIONS,
   yoloMusicVideoWorkflowId,
   setYoloMusicVideoWorkflowId,
   yoloMusicVideoWorkflowOptions = DEFAULT_VIDEO_WORKFLOW_OPTIONS,
@@ -438,15 +454,36 @@ export default function MusicVideoEasyMode({
       }))
       .filter((option) => option.id)
   }, [yoloMusicVideoWorkflowOptions])
+  const keyframeWorkflowOptions = useMemo(() => {
+    const options = Array.isArray(yoloMusicKeyframeWorkflowOptions) && yoloMusicKeyframeWorkflowOptions.length > 0
+      ? yoloMusicKeyframeWorkflowOptions
+      : DEFAULT_KEYFRAME_WORKFLOW_OPTIONS
+    return options
+      .map((option) => ({
+        ...option,
+        id: String(option?.id || '').trim(),
+        label: String(option?.label || option?.id || '').trim(),
+        runtimeLabel: String(option?.runtimeLabel || '').trim(),
+        description: String(option?.description || '').trim(),
+      }))
+      .filter((option) => option.id)
+  }, [yoloMusicKeyframeWorkflowOptions])
   const selectedVideoWorkflow = useMemo(() => (
     videoWorkflowOptions.find((option) => option.id === yoloMusicVideoWorkflowId)
       || videoWorkflowOptions[0]
       || DEFAULT_VIDEO_WORKFLOW_OPTIONS[0]
   ), [videoWorkflowOptions, yoloMusicVideoWorkflowId])
+  const selectedKeyframeWorkflow = useMemo(() => (
+    keyframeWorkflowOptions.find((option) => option.id === yoloMusicKeyframeWorkflowId)
+      || keyframeWorkflowOptions[0]
+      || DEFAULT_KEYFRAME_WORKFLOW_OPTIONS[0]
+  ), [keyframeWorkflowOptions, yoloMusicKeyframeWorkflowId])
   const selectedVideoWorkflowId = String(selectedVideoWorkflow?.id || '').trim()
   const selectedVideoWorkflowLabel = selectedVideoWorkflow?.label || selectedVideoWorkflowId || 'Video model'
+  const selectedKeyframeWorkflowId = String(selectedKeyframeWorkflow?.id || '').trim()
+  const selectedKeyframeWorkflowLabel = selectedKeyframeWorkflow?.label || selectedKeyframeWorkflowId || 'Keyframe model'
   const defaultVideoWorkflowId = videoWorkflowOptions[0]?.id || MUSIC_VIDEO_SHOT_WORKFLOW_ID
-  const selectedVideoWorkflowSupports2k = workflowSupports2kResolution(selectedVideoWorkflowId)
+  const selectedVideoWorkflowSupports1080 = workflowSupports1080Resolution(selectedVideoWorkflowId)
   const storyboardJobMap = useMemo(() => {
     const map = new Map()
     for (const job of generationQueue || []) {
@@ -604,6 +641,12 @@ export default function MusicVideoEasyMode({
     setVideoStatus('')
   }
 
+  const handleKeyframeWorkflowChange = (workflowId) => {
+    if (!workflowId || workflowId === selectedKeyframeWorkflowId) return
+    setYoloMusicKeyframeWorkflowId?.(workflowId)
+    setKeyframeStatus('')
+  }
+
   const handleResolutionPresetChange = (presetId) => {
     if (!RESOLUTION_OPTIONS.some((option) => option.id === presetId)) return
     if (getResolutionFallbackForWorkflow(selectedVideoWorkflowId, presetId) !== presetId) return
@@ -685,10 +728,10 @@ export default function MusicVideoEasyMode({
         return
       }
       const queued = await handleQueueYoloStoryboards({
-        sourceLabel: 'Music Video Easy Mode keyframe pass',
+        sourceLabel: `Music Video Easy Mode ${selectedKeyframeWorkflowLabel} keyframe pass`,
         resolutionOverride: outputResolution,
       })
-      setKeyframeStatus(queued > 0 ? `Queued ${plural(queued, 'keyframe')}.` : 'No keyframes were queued. Any existing shots may already be complete or running.')
+      setKeyframeStatus(queued > 0 ? `Queued ${plural(queued, `${selectedKeyframeWorkflowLabel} keyframe`)}.` : 'No keyframes were queued. Any existing shots may already be complete or running.')
     } finally {
       setIsQueuingKeyframes(false)
     }
@@ -697,7 +740,7 @@ export default function MusicVideoEasyMode({
   const handleRegenerateSelectedKeyframe = async () => {
     if (!selectedShotRow) return
     setIsQueuingKeyframes(true)
-    setKeyframeStatus(`Queued keyframe regeneration for Shot ${selectedShotIndex + 1}.`)
+    setKeyframeStatus(`Queued ${selectedKeyframeWorkflowLabel} keyframe regeneration for Shot ${selectedShotIndex + 1}.`)
     try {
       await handleQueueYoloShotStoryboard(selectedShotRow.scene.id, selectedShotRow.shot.id, {
         resolutionOverride: outputResolution,
@@ -714,10 +757,10 @@ export default function MusicVideoEasyMode({
     try {
       const queued = await handleQueueYoloStoryboards({
         allowExistingDoneKeys: true,
-        sourceLabel: 'Music Video Easy Mode keyframe regeneration pass',
+        sourceLabel: `Music Video Easy Mode ${selectedKeyframeWorkflowLabel} keyframe regeneration pass`,
         resolutionOverride: outputResolution,
       })
-      setKeyframeStatus(queued > 0 ? `Queued ${plural(queued, 'keyframe regeneration job')}.` : 'No keyframe regeneration jobs were queued. Check whether those shots are already running.')
+      setKeyframeStatus(queued > 0 ? `Queued ${plural(queued, `${selectedKeyframeWorkflowLabel} keyframe regeneration job`)}.` : 'No keyframe regeneration jobs were queued. Check whether those shots are already running.')
     } finally {
       setIsQueuingKeyframes(false)
     }
@@ -1287,15 +1330,43 @@ export default function MusicVideoEasyMode({
               The keyframe prompt on each shot becomes the still-image prompt for that exact beat.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={handleQueueKeyframes}
-            disabled={!canQueueKeyframes || isQueuingKeyframes || yoloDependencyCheckInProgress}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-sf-accent px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-sf-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isQueuingKeyframes ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-            Create Keyframes
-          </button>
+          <div className="flex flex-col gap-2 md:items-end">
+            <div className="flex flex-wrap items-center gap-1.5 md:justify-end">
+              <span className="mr-1 text-[10px] uppercase tracking-wider text-sf-text-muted">Keyframe model</span>
+              {keyframeWorkflowOptions.map((option) => (
+                <button
+                  key={`music-keyframe-model-${option.id}`}
+                  type="button"
+                  onClick={() => handleKeyframeWorkflowChange(option.id)}
+                  title={option.description}
+                  className={`rounded-lg border px-2.5 py-1.5 text-left text-[10px] font-semibold transition-colors ${buttonClass(selectedKeyframeWorkflowId === option.id)}`}
+                >
+                  <span>{option.label}</span>
+                  {option.runtimeLabel && <span className="ml-1 text-sf-text-muted">({option.runtimeLabel})</span>}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={handleQueueKeyframes}
+              disabled={!canQueueKeyframes || isQueuingKeyframes || yoloDependencyCheckInProgress}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-sf-accent px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-sf-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isQueuingKeyframes ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+              Create Keyframes
+            </button>
+          </div>
+        </div>
+        <div className="mt-3 rounded-lg border border-sf-dark-700 bg-sf-dark-950/60 p-3 text-xs leading-5 text-sf-text-secondary">
+          <span className="font-semibold text-sf-text-primary">{selectedKeyframeWorkflowLabel}</span>
+          {selectedKeyframeWorkflow?.description
+            ? `: ${selectedKeyframeWorkflow.description} New keyframe jobs and rerenders use this model.`
+            : ' is used for new or regenerated keyframes.'}
+          {selectedKeyframeWorkflowId === 'image-edit' && yoloMusicResolvedCast.length === 0 && (
+            <span className="mt-1 block text-amber-200">
+              Qwen Image Edit needs a cast/reference image. Add a person in the People step, or switch to Nano Banana 2 for reference-free keyframes.
+            </span>
+          )}
         </div>
         {yoloActivePlanIsStale && (
           <div className="mt-3 rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-100">
@@ -1476,12 +1547,12 @@ export default function MusicVideoEasyMode({
               <div className="text-[10px] uppercase tracking-[0.14em] text-sf-text-muted">New rerenders use</div>
               <div className="mt-1 text-sm font-semibold text-sf-text-primary">{outputResolutionLabel}</div>
               <p className="mt-1 max-w-3xl text-xs leading-5 text-sf-text-secondary">
-                {selectedVideoWorkflowSupports2k
-                  ? 'This affects future video renders only. For the cleanest high-res shot, regenerate that shot keyframe at the same size first, then rerun the video.'
+                {selectedVideoWorkflowSupports1080
+                  ? 'This affects future video renders only. 1080p is the highest LTX 2.3 Music size available here for reliability.'
                   : 'WAN 2.2 rerenders are limited to 720p here, so higher resolutions are disabled for this model.'}
               </p>
             </div>
-            <div className="grid min-w-[240px] grid-cols-3 gap-2">
+            <div className="grid min-w-[180px] grid-cols-2 gap-2">
               {RESOLUTION_OPTIONS.map((option) => {
                 const disabled = getResolutionFallbackForWorkflow(selectedVideoWorkflowId, option.id) !== option.id
                 return (
@@ -1490,7 +1561,7 @@ export default function MusicVideoEasyMode({
                     type="button"
                     onClick={() => handleResolutionPresetChange(option.id)}
                     disabled={disabled}
-                    title={disabled ? 'WAN 2.2 rerenders are limited to 720p.' : ''}
+                    title={disabled ? 'This video model is limited to 720p here.' : ''}
                     className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
                       disabled
                         ? 'cursor-not-allowed border-sf-dark-700 bg-sf-dark-950/50 text-sf-text-muted/40'

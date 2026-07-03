@@ -1,4 +1,4 @@
-import { Upload, FolderOpen, Image, Video, Music, Search, Grid, List, Trash2, Edit3, Play, FileVideo, FileAudio, FileImage, Loader2, FolderPlus, ChevronRight, ChevronDown, ChevronLeft, Home, Minus, Plus, MoreVertical, FolderInput, Wand2, Layers, Film, VolumeX, Volume2, ArrowUpDown, ArrowUp, ArrowDown, Copy, Type, RefreshCcw } from 'lucide-react'
+import { Upload, FolderOpen, Image, Video, Music, Search, Grid, List, Trash2, Edit3, Play, FileVideo, FileAudio, FileImage, FileText, Loader2, FolderPlus, ChevronRight, ChevronDown, ChevronLeft, Home, Minus, Plus, MoreVertical, FolderInput, Wand2, Layers, Film, VolumeX, Volume2, ArrowUpDown, ArrowUp, ArrowDown, Copy, Type, RefreshCcw } from 'lucide-react'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import useAssetsStore from '../../stores/assetsStore'
 import useProjectStore from '../../stores/projectStore'
@@ -33,6 +33,8 @@ const FOLDER_TILE_ICON_SIZES = {
   large: 'w-20 h-20',
 }
 let transparentAssetDragImage = null
+
+const isImagePreviewAssetType = (type) => type === 'image' || type === 'ingredients_sheet'
 
 function getFcpXmlImportCategory(resource, mediaType) {
   if (mediaType === 'image' || resource?.kind === 'image') return 'images'
@@ -132,7 +134,7 @@ function VideoAssetThumbnail({
           style={spriteStyle}
           aria-hidden="true"
         />
-      ) : shouldLoad && asset?.type === 'image' && asset?.url ? (
+      ) : shouldLoad && isImagePreviewAssetType(asset?.type) && asset?.url ? (
         <img src={asset.url} alt={imageAlt} className={imageClassName} loading="lazy" decoding="async" />
       ) : fallback}
     </div>
@@ -158,6 +160,7 @@ function AssetsPanel({ isActive = true }) {
   const [isAssetDragActive, setIsAssetDragActive] = useState(false)
   const [assetDragPreview, setAssetDragPreview] = useState(null) // { assetId, clientX, clientY }
   const fileInputRef = useRef(null)
+  const ingredientsSheetInputRef = useRef(null)
   const activeAssetDragIdRef = useRef(null)
   
   // Folder state
@@ -374,7 +377,8 @@ function AssetsPanel({ isActive = true }) {
   const SUPPORTED_VIDEO = ['.mp4', '.webm', '.mov']
   const SUPPORTED_AUDIO = ['.mp3', '.wav', '.ogg']
   const SUPPORTED_IMAGE = ['.jpg', '.jpeg', '.png', '.gif', '.webp']
-  const ALL_SUPPORTED = [...SUPPORTED_VIDEO, ...SUPPORTED_AUDIO, ...SUPPORTED_IMAGE]
+  const SUPPORTED_SRT = ['.srt']
+  const ALL_SUPPORTED = [...SUPPORTED_VIDEO, ...SUPPORTED_AUDIO, ...SUPPORTED_IMAGE, ...SUPPORTED_SRT]
   
   // Determine file category from extension
   const getFileCategory = (filename) => {
@@ -382,6 +386,7 @@ function AssetsPanel({ isActive = true }) {
     if (SUPPORTED_VIDEO.includes(ext)) return 'video'
     if (SUPPORTED_AUDIO.includes(ext)) return 'audio'
     if (SUPPORTED_IMAGE.includes(ext)) return 'images'
+    if (SUPPORTED_SRT.includes(ext)) return 'srt'
     return null
   }
   
@@ -447,6 +452,44 @@ function AssetsPanel({ isActive = true }) {
   const handleFileInputChange = (e) => {
     const files = Array.from(e.target.files || [])
     handleImport(files)
+    e.target.value = ''
+  }
+
+  const handleImportIngredientsSheets = async (files) => {
+    if (!currentProjectHandle || files.length === 0) return
+
+    setIsImporting(true)
+    for (const file of files) {
+      const ext = '.' + file.name.split('.').pop().toLowerCase()
+      if (!SUPPORTED_IMAGE.includes(ext)) {
+        console.warn(`Unsupported ingredients sheet type: ${file.name}`)
+        continue
+      }
+
+      try {
+        const assetInfo = await importAsset(currentProjectHandle, file, 'ingredients_sheet')
+        addAsset({
+          ...assetInfo,
+          type: 'ingredients_sheet',
+          url: URL.createObjectURL(file),
+          folderId: currentFolderId,
+          settings: {
+            ...(assetInfo.settings || {}),
+            width: assetInfo.width,
+            height: assetInfo.height,
+            referenceRole: 'ingredients_sheet',
+          },
+        })
+      } catch (err) {
+        console.error(`Error importing ingredients sheet ${file.name}:`, err)
+      }
+    }
+    setIsImporting(false)
+  }
+
+  const handleIngredientsSheetInputChange = (e) => {
+    const files = Array.from(e.target.files || [])
+    handleImportIngredientsSheets(files)
     e.target.value = ''
   }
 
@@ -713,6 +756,10 @@ function AssetsPanel({ isActive = true }) {
     fileInputRef.current?.click()
   }
 
+  const openIngredientsSheetPicker = () => {
+    ingredientsSheetInputRef.current?.click()
+  }
+
   const closeOverlayModal = () => {
     setOverlayModalOpen(false)
   }
@@ -908,9 +955,11 @@ function AssetsPanel({ isActive = true }) {
   const getIcon = (type) => {
     switch (type) {
       case 'image': return Image
+      case 'ingredients_sheet': return FileImage
       case 'video': return Video
       case 'audio': return Music
       case 'mask': return Layers
+      case 'srt': return FileText
       default: return FolderOpen
     }
   }
@@ -1044,7 +1093,9 @@ function AssetsPanel({ isActive = true }) {
     if (a.type === 'mask') return 'Mask'
     if (a.type === 'video') return 'Video'
     if (a.type === 'image') return 'Image'
+    if (a.type === 'ingredients_sheet') return 'Ingredients Sheet'
     if (a.type === 'audio') return 'Audio'
+    if (a.type === 'srt') return 'SRT'
     return a.type || '—'
   }
   const getBrowserItemName = (entry) => {
@@ -1435,6 +1486,10 @@ function AssetsPanel({ isActive = true }) {
   const handleEmptyMenuImport = () => {
     setContextMenu(null)
     openFilePicker()
+  }
+  const handleEmptyMenuImportIngredientsSheet = () => {
+    setContextMenu(null)
+    openIngredientsSheetPicker()
   }
   const handleEmptyMenuNewTimeline = () => {
     setContextMenu(null)
@@ -1927,6 +1982,14 @@ function AssetsPanel({ isActive = true }) {
         onChange={handleFileInputChange}
         className="hidden"
       />
+      <input
+        ref={ingredientsSheetInputRef}
+        type="file"
+        multiple
+        accept={SUPPORTED_IMAGE.join(',')}
+        onChange={handleIngredientsSheetInputChange}
+        className="hidden"
+      />
       
       {/* Header */}
       <div className="p-2 border-b border-sf-dark-700 space-y-2">
@@ -1970,6 +2033,14 @@ function AssetsPanel({ isActive = true }) {
             ) : (
               <Upload className="w-3.5 h-3.5 text-sf-text-secondary" />
             )}
+          </button>
+          <button
+            onClick={openIngredientsSheetPicker}
+            disabled={!currentProjectHandle || isImporting}
+            className="p-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 disabled:opacity-50 rounded transition-colors"
+            title="Import Ingredients Sheet"
+          >
+            <FileImage className="w-3.5 h-3.5 text-sf-text-secondary" />
           </button>
         </div>
         
@@ -2104,7 +2175,7 @@ function AssetsPanel({ isActive = true }) {
           <div className="text-center">
             <Upload className="w-8 h-8 text-sf-accent mx-auto mb-2" />
             <p className="text-sm text-sf-text-primary font-medium">Drop to import</p>
-            <p className="text-xs text-sf-text-muted">Video, audio, or image files</p>
+            <p className="text-xs text-sf-text-muted">Video, audio, image, or SRT files</p>
           </div>
         </div>
       )}
@@ -2135,6 +2206,14 @@ function AssetsPanel({ isActive = true }) {
               >
                 <Upload className="w-3 h-3" />
                 Import Media
+              </button>
+              <button
+                onClick={openIngredientsSheetPicker}
+                disabled={!currentProjectHandle}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 disabled:opacity-50 rounded text-xs text-sf-text-secondary transition-colors"
+              >
+                <FileImage className="w-3 h-3" />
+                Import Ingredients Sheet
               </button>
               <button
                 onClick={() => setShowNewFolderInput(true)}
@@ -2699,6 +2778,14 @@ function AssetsPanel({ isActive = true }) {
               >
                 <Upload className="w-3 h-3 text-sf-accent" />
                 Import
+              </button>
+              <button
+                onClick={handleEmptyMenuImportIngredientsSheet}
+                disabled={!currentProjectHandle || isImporting}
+                className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <FileImage className="w-3 h-3 text-sf-accent" />
+                Import Ingredients Sheet
               </button>
               <button
                 onClick={handleImportFcpXml}

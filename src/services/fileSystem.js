@@ -203,7 +203,7 @@ export const saveProject = async (projectDir, projectData) => {
   const saveTimestamp = new Date()
   const dataWithMeta = {
     ...projectData,
-    version: '1.0',
+    version: '1.1',
     modified: saveTimestamp.toISOString(),
   }
   const serializedProject = JSON.stringify(dataWithMeta, null, 2)
@@ -488,10 +488,41 @@ export const listProjects = async (baseDir) => {
  * Import a file to the project's assets folder
  * @param {string|FileSystemDirectoryHandle} projectDir - The project directory
  * @param {File|string} file - The file to import (File object or path in Electron)
- * @param {string} category - Asset category: 'video', 'audio', or 'images'
+ * @param {string} category - Asset category: 'video', 'audio', 'images', 'srt', or 'ingredients_sheet'
  * @returns {Promise<object>} - Asset info object with relative path
  */
 export const importAsset = async (projectDir, file, category = 'video') => {
+  const getAssetTypeForCategory = (assetCategory) => {
+    if (assetCategory === 'images') return 'image'
+    if (assetCategory === 'ingredients_sheet') return 'ingredients_sheet'
+    if (assetCategory === 'srt') return 'srt'
+    return assetCategory
+  }
+  const shouldExtractMediaInfo = (assetCategory) => (
+    assetCategory === 'video'
+    || assetCategory === 'audio'
+    || assetCategory === 'images'
+    || assetCategory === 'ingredients_sheet'
+  )
+  const getMediaInfoCategory = (assetCategory) => (
+    assetCategory === 'ingredients_sheet' ? 'images' : assetCategory
+  )
+  const readSrtText = async (storedPath = null) => {
+    if (category !== 'srt') return null
+    try {
+      if (typeof file !== 'string' && typeof file?.text === 'function') {
+        return await file.text()
+      }
+      if (storedPath && isElectron() && window.electronAPI?.readFile) {
+        const result = await window.electronAPI.readFile(storedPath, { encoding: 'utf8' })
+        if (result?.success && typeof result.data === 'string') return result.data
+      }
+    } catch (err) {
+      console.warn('Could not read imported SRT text:', err)
+    }
+    return null
+  }
+
   if (isElectron()) {
     // In Electron, file can be a File object (from drag-drop) or a string path
     const srcPath = typeof file === 'string' ? file : null
@@ -544,11 +575,11 @@ export const importAsset = async (projectDir, file, category = 'video') => {
     let videoCodec = null
     let audioCodec = null
     
-    if (category === 'video' || category === 'audio' || category === 'images') {
+    if (shouldExtractMediaInfo(category)) {
       try {
         const fileUrl = await window.electronAPI.getFileUrlDirect(destPath)
         console.log(`Getting media info for ${finalFileName} from ${fileUrl}`)
-        const mediaInfo = await getMediaInfoFromUrl(fileUrl, category)
+        const mediaInfo = await getMediaInfoFromUrl(fileUrl, getMediaInfoCategory(category))
         duration = mediaInfo.duration
         width = mediaInfo.width
         height = mediaInfo.height
@@ -563,7 +594,7 @@ export const importAsset = async (projectDir, file, category = 'video') => {
         if (typeof file !== 'string' && file instanceof File) {
           try {
             const blobUrl = URL.createObjectURL(file)
-            const mediaInfo = await getMediaInfoFromUrl(blobUrl, category)
+            const mediaInfo = await getMediaInfoFromUrl(blobUrl, getMediaInfoCategory(category))
             duration = mediaInfo.duration
             width = mediaInfo.width
             height = mediaInfo.height
@@ -599,10 +630,11 @@ export const importAsset = async (projectDir, file, category = 'video') => {
       }
     }
 
+    const srtText = await readSrtText(destPath)
     const importedAsset = {
       id: `asset_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       name: finalFileName,
-      type: category === 'images' ? 'image' : category,
+      type: getAssetTypeForCategory(category),
       path: relativePath,
       absolutePath: destPath, // Store absolute path for Electron
       imported: new Date().toISOString(),
@@ -615,6 +647,7 @@ export const importAsset = async (projectDir, file, category = 'video') => {
       videoCodec,
       audioCodec,
       isImported: true,
+      ...(srtText != null ? { text: srtText, rawText: srtText } : {}),
     }
     if (category === 'video') {
       const resolvedHasAudio = hasAudio !== false
@@ -658,7 +691,7 @@ export const importAsset = async (projectDir, file, category = 'video') => {
   let height = null
   let hasAudio = null
   
-  if (category === 'video' || category === 'audio' || category === 'images') {
+  if (shouldExtractMediaInfo(category)) {
     try {
       const mediaInfo = await getMediaInfo(file)
       duration = mediaInfo.duration
@@ -672,10 +705,11 @@ export const importAsset = async (projectDir, file, category = 'video') => {
     }
   }
 
+  const srtText = await readSrtText()
   const importedAsset = {
     id: `asset_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     name: fileName,
-    type: category === 'images' ? 'image' : category,
+    type: getAssetTypeForCategory(category),
     path: relativePath,
     imported: new Date().toISOString(),
     size: file.size,
@@ -684,6 +718,7 @@ export const importAsset = async (projectDir, file, category = 'video') => {
     width,
     height,
     isImported: true,
+    ...(srtText != null ? { text: srtText, rawText: srtText } : {}),
   }
   if (category === 'video') {
     const resolvedHasAudio = hasAudio !== false
@@ -769,6 +804,7 @@ function getMimeType(filename) {
     png: 'image/png',
     gif: 'image/gif',
     webp: 'image/webp',
+    srt: 'application/x-subrip',
   }
   return mimeTypes[ext] || 'application/octet-stream'
 }

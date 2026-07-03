@@ -118,6 +118,81 @@ const getDisplayName = (handleOrPath) => {
   return handleOrPath.name
 }
 
+const MUSIC_VIDEO_SHOT_INPUT_MODES = new Set(['keyframe_image', 'ingredients_sheet'])
+
+const normalizeShotInputMode = (value) => {
+  const normalized = String(value || '').trim()
+  return MUSIC_VIDEO_SHOT_INPUT_MODES.has(normalized) ? normalized : 'keyframe_image'
+}
+
+const normalizeShotStringList = (value) => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => String(entry || '').trim())
+    .filter(Boolean)
+}
+
+const normalizePendingCandidates = (value) => {
+  if (!Array.isArray(value)) return []
+  return value.map((entry) => (
+    entry && typeof entry === 'object' && !Array.isArray(entry)
+      ? { ...entry }
+      : entry
+  ))
+}
+
+const normalizeGenerateWorkspaceShot = (shot) => {
+  if (!shot || typeof shot !== 'object' || Array.isArray(shot)) return shot
+  return {
+    ...shot,
+    input_mode: normalizeShotInputMode(shot.input_mode),
+    ingredientsSheetAssetId: String(shot.ingredientsSheetAssetId || '').trim(),
+    locations: normalizeShotStringList(shot.locations),
+    accessories: normalizeShotStringList(shot.accessories),
+    pendingCandidates: normalizePendingCandidates(shot.pendingCandidates),
+  }
+}
+
+const normalizeGenerateWorkspacePlan = (plan) => {
+  if (!Array.isArray(plan)) return []
+  return plan.map((scene) => {
+    if (!scene || typeof scene !== 'object' || Array.isArray(scene)) return scene
+    const shots = Array.isArray(scene.shots) ? scene.shots : []
+    return {
+      ...scene,
+      shots: shots.map(normalizeGenerateWorkspaceShot),
+    }
+  })
+}
+
+const normalizeGenerateWorkspaceVariants = (variants) => {
+  if (!Array.isArray(variants)) return variants
+  return variants.map(normalizeGenerateWorkspaceShot)
+}
+
+const normalizeGenerateWorkspaceProjectState = (generateWorkspace) => {
+  if (!generateWorkspace || typeof generateWorkspace !== 'object' || Array.isArray(generateWorkspace)) return null
+  const normalized = { ...generateWorkspace }
+  normalized.yoloPlan = normalizeGenerateWorkspacePlan(normalized.yoloPlan)
+  normalized.yoloMusicPlan = normalizeGenerateWorkspacePlan(normalized.yoloMusicPlan)
+  if (Array.isArray(normalized.yoloMusicAltScripts)) {
+    normalized.yoloMusicAltScripts = normalized.yoloMusicAltScripts.map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry
+      return {
+        ...entry,
+        plan: normalizeGenerateWorkspacePlan(entry.plan),
+      }
+    })
+  }
+  if (Array.isArray(normalized.yoloVariants)) {
+    normalized.yoloVariants = normalizeGenerateWorkspaceVariants(normalized.yoloVariants)
+  }
+  if (Array.isArray(normalized.yoloQueueVariants)) {
+    normalized.yoloQueueVariants = normalizeGenerateWorkspaceVariants(normalized.yoloQueueVariants)
+  }
+  return normalized
+}
+
 const normalizeOpenedProjectData = (projectData) => {
   const normalizedProject = { ...(projectData || {}) }
 
@@ -143,6 +218,7 @@ const normalizeOpenedProjectData = (projectData) => {
   const currentTimeline = normalizedProject.timelines.find((timeline) => timeline.id === currentTimelineId) || normalizedProject.timelines[0]
 
   normalizedProject.flowAi = normalizeFlowAiProjectData(normalizedProject.flowAi)
+  normalizedProject.generateWorkspace = normalizeGenerateWorkspaceProjectState(normalizedProject.generateWorkspace)
 
   return {
     projectData: normalizedProject,

@@ -37,6 +37,7 @@ export const CUSTOM_KEYFRAME_ENDPOINTS = Object.freeze({
 })
 export const CUSTOM_VIDEO_ENDPOINTS = Object.freeze({
   inputImage: 'COMFYSTUDIO_INPUT_IMAGE',
+  inputIngredients: 'COMFYSTUDIO_INPUT_INGREDIENTS',
   prompt: 'COMFYSTUDIO_PROMPT',
   seed: 'COMFYSTUDIO_SEED',
   width: 'COMFYSTUDIO_WIDTH',
@@ -87,6 +88,32 @@ function findCustomKeyframeEndpointNodes(workflow) {
 
 function findCustomVideoEndpointNodes(workflow) {
   return findCustomEndpointNodes(workflow, CUSTOM_VIDEO_ENDPOINTS)
+}
+
+function replaceWorkflowInputRefs(workflow, fromNodeId, toNodeId, outputIndex = 0) {
+  if (!workflow || !fromNodeId || !toNodeId || String(fromNodeId) === String(toNodeId)) return
+  for (const node of Object.values(workflow)) {
+    if (!node?.inputs) continue
+    for (const [inputName, inputValue] of Object.entries(node.inputs)) {
+      if (inputRefEquals(inputValue, fromNodeId, outputIndex)) {
+        node.inputs[inputName] = [String(toNodeId), outputIndex]
+      }
+    }
+  }
+}
+
+function setPowerLoraEnabledByName(loraInputs, matchers = [], enabled = false, strength = null) {
+  if (!loraInputs || typeof loraInputs !== 'object') return false
+  let matched = false
+  for (const [key, value] of Object.entries(loraInputs)) {
+    if (!/^lora_\d+$/.test(key) || !value || typeof value !== 'object') continue
+    const loraName = String(value.lora || '')
+    if (!matchers.some((matcher) => matcher.test(loraName))) continue
+    value.on = Boolean(enabled)
+    if (Number.isFinite(Number(strength))) value.strength = Number(strength)
+    matched = true
+  }
+  return matched
 }
 
 function firstWritableInputKey(node, preferredKeys = []) {
@@ -289,13 +316,19 @@ export function validateCustomVideoWorkflow(workflow, options = {}) {
   const endpoints = findCustomVideoEndpointNodes(workflow)
   const missing = []
   const warnings = []
-  if (requireInputImage && !endpoints.inputImage) missing.push(CUSTOM_VIDEO_ENDPOINTS.inputImage)
+  const hasImageInputEndpoint = Boolean(endpoints.inputImage || endpoints.inputIngredients)
+  if (requireInputImage && !hasImageInputEndpoint) {
+    missing.push(`${CUSTOM_VIDEO_ENDPOINTS.inputImage} or ${CUSTOM_VIDEO_ENDPOINTS.inputIngredients}`)
+  }
   if (!endpoints.prompt) missing.push(CUSTOM_VIDEO_ENDPOINTS.prompt)
   if (!endpoints.outputVideo) missing.push(CUSTOM_VIDEO_ENDPOINTS.outputVideo)
   const blocking = [...missing]
 
   if (endpoints.inputImage && endpoints.inputImage.node?.class_type !== 'LoadImage') {
     blocking.push(`${CUSTOM_VIDEO_ENDPOINTS.inputImage} must be a LoadImage node`)
+  }
+  if (endpoints.inputIngredients && endpoints.inputIngredients.node?.class_type !== 'LoadImage') {
+    blocking.push(`${CUSTOM_VIDEO_ENDPOINTS.inputIngredients} must be a LoadImage node`)
   }
   if (endpoints.prompt && !firstWritableInputKey(endpoints.prompt.node, ['value', 'prompt', 'text', 'string'])) {
     blocking.push(`${CUSTOM_VIDEO_ENDPOINTS.prompt} needs a writable value, prompt, text, or string input`)
@@ -2995,13 +3028,14 @@ export function modifyVocalExtractWorkflow(workflow, options = {}) {
  *
  * Maps a normalized shot object (see musicVideoShotConfig.normalizeMusicVideoShot)
  * plus per-project audio onto the node inputs of
- * public/workflows/music_video_shot_ltx2_3_i2v_audio.json.
+ * public/workflows/music_video_shot_ltx2_3_dual_input.json.
  *
  * Shape of `options`:
  *   {
  *     shot: { shotType, length, audioStart, shotPrompt, ... },
  *     inputAudio: 'song_or_vocal_stem.mp3' (uploaded to ComfyUI),
  *     inputImage: 'shot_reference.png' (uploaded to ComfyUI),
+ *     inputIngredients: 'ingredients_sheet.png' (uploaded to ComfyUI),
  *     useVocalsOnly: false (true = run Mel-Band at graph time; prefer false +
  *       pre-extracted stem),
  *     enablePromptEnhancer: false,
@@ -3016,6 +3050,7 @@ export function modifyMusicVideoShotWorkflow(workflow, options = {}) {
     shot: rawShot = {},
     inputAudio = '',
     inputImage = '',
+    inputIngredients = '',
     useVocalsOnly = false,
     enablePromptEnhancer = false,
     width = MUSIC_VIDEO_SHOT_DEFAULTS.width,
@@ -3027,6 +3062,10 @@ export function modifyMusicVideoShotWorkflow(workflow, options = {}) {
   } = options
 
   const shot = normalizeMusicVideoShot(rawShot)
+  const inputMode = String(shot.inputMode || shot.input_mode || '').trim() === 'ingredients_sheet'
+    ? 'ingredients_sheet'
+    : 'keyframe_image'
+  const usesIngredientsInput = inputMode === 'ingredients_sheet'
   const shotTypeOption = getMusicVideoShotTypeOption(shot.shotType) || getMusicVideoShotTypeOption('performance')
   const hasExplicitImageStrength = Number.isFinite(Number(rawShot?.imageStrength))
   const resolvedImageStrength = hasExplicitImageStrength
@@ -3051,10 +3090,27 @@ export function modifyMusicVideoShotWorkflow(workflow, options = {}) {
   const numericFps = Math.max(1, Math.round(Number(fps) || MUSIC_VIDEO_SHOT_DEFAULTS.fps))
 
   const modified = JSON.parse(JSON.stringify(workflow))
+  const endpoints = findCustomVideoEndpointNodes(modified)
+  const keyframeInputNodeId = endpoints.inputImage?.nodeId || '444'
+  const keyframeInputNode = endpoints.inputImage?.node || modified[keyframeInputNodeId]
+  const ingredientsInputNodeId = endpoints.inputIngredients?.nodeId || null
+  const ingredientsInputNode = endpoints.inputIngredients?.node || null
+  const selectedInputImage = usesIngredientsInput
+    ? (inputIngredients || inputImage)
+    : inputImage
 
-  // LoadImage (reference still) — node 444
-  if (modified['444']?.inputs && 'image' in modified['444'].inputs) {
-    modified['444'].inputs.image = inputImage || modified['444'].inputs.image
+  // LoadImage endpoints. New dual-input workflows expose titled endpoints;
+  // legacy music-shot workflows still fall back to node 444.
+  if (keyframeInputNode?.inputs && 'image' in keyframeInputNode.inputs) {
+    keyframeInputNode.inputs.image = inputImage || selectedInputImage || keyframeInputNode.inputs.image
+  }
+  if (ingredientsInputNode?.inputs && 'image' in ingredientsInputNode.inputs) {
+    ingredientsInputNode.inputs.image = inputIngredients || inputImage || ingredientsInputNode.inputs.image
+  }
+  if (usesIngredientsInput && ingredientsInputNodeId && keyframeInputNodeId) {
+    replaceWorkflowInputRefs(modified, keyframeInputNodeId, ingredientsInputNodeId)
+  } else if (!usesIngredientsInput && ingredientsInputNodeId && keyframeInputNodeId) {
+    replaceWorkflowInputRefs(modified, ingredientsInputNodeId, keyframeInputNodeId)
   }
   // LoadAudio (project song or pre-extracted vocal stem) — node 1594
   if (modified['1594']?.inputs && 'audio' in modified['1594'].inputs) {
@@ -3104,6 +3160,8 @@ export function modifyMusicVideoShotWorkflow(workflow, options = {}) {
   //   lora_2 = Licon-VBVR (foundational, always on)
   //   lora_3 = Image2Vid-Adapter (foundational, always on)
   //   lora_4 = camera control / dolly-out (optional per shot)
+  //   lora_5 = IC Ingredients (ingredients-sheet mode)
+  //   lora_6 = MSR (keyframe-image mode)
   if (modified['2150']?.inputs) {
     const loraInputs = modified['2150'].inputs
     if (loraInputs.lora_1 && typeof loraInputs.lora_1 === 'object') {
@@ -3113,6 +3171,26 @@ export function modifyMusicVideoShotWorkflow(workflow, options = {}) {
     if (loraInputs.lora_4 && typeof loraInputs.lora_4 === 'object') {
       loraInputs.lora_4.on = Boolean(shotTypeOption.cameraLoraOn)
       loraInputs.lora_4.strength = Number(shotTypeOption.cameraLoraStrength) || 0
+    }
+    const ingredientsLoraMatched = setPowerLoraEnabledByName(
+      loraInputs,
+      [/IC-LoRA-Ingredients/i, /Ingredients/i],
+      usesIngredientsInput,
+      1
+    )
+    const msrLoraMatched = setPowerLoraEnabledByName(
+      loraInputs,
+      [/Multiple-Subject-Reference/i, /\bMSR\b/i],
+      !usesIngredientsInput,
+      1
+    )
+    if (!ingredientsLoraMatched && loraInputs.lora_5 && typeof loraInputs.lora_5 === 'object') {
+      loraInputs.lora_5.on = usesIngredientsInput
+      loraInputs.lora_5.strength = 1
+    }
+    if (!msrLoraMatched && loraInputs.lora_6 && typeof loraInputs.lora_6 === 'object') {
+      loraInputs.lora_6.on = !usesIngredientsInput
+      loraInputs.lora_6.strength = 1
     }
   }
   // Seeds — Pass 1 (2179) and Pass 2 (2169)

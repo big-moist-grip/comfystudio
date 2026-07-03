@@ -1,4 +1,4 @@
-import { Maximize2, Minimize2, Plus, X, Check, Home, ZoomIn, ZoomOut, Move, Play, Pause, SkipBack, SkipForward, Volume2, Film, Image as ImageIcon, ChevronDown, Grid3X3, Crosshair, Square, Frame, Eye, EyeOff, Layers, Wand2, Camera, Loader2 } from 'lucide-react'
+import { Maximize2, Minimize2, Plus, X, Check, Home, ZoomIn, ZoomOut, Move, Play, Pause, SkipBack, SkipForward, Volume2, Film, Image as ImageIcon, ChevronDown, Grid3X3, Crosshair, Square, Frame, Eye, EyeOff, Layers, Wand2, Camera, Loader2, FileText } from 'lucide-react'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import useAssetsStore from '../stores/assetsStore'
 import useTimelineStore from '../stores/timelineStore'
@@ -20,6 +20,14 @@ import {
 import { generateMissingProxiesForAllVideos, hasUsableProxy, isProxyableVideoAsset } from '../services/proxyCache'
 import { importAsset } from '../services/fileSystem'
 import { getGlslPreviewQualityScale } from '../utils/glslEffects'
+
+const isImagePreviewAssetType = (type) => type === 'image' || type === 'ingredients_sheet'
+const isTimelineAddablePreviewType = (type) => type === 'video' || type === 'image' || type === 'audio'
+const formatAssetTypeLabel = (type = '') => {
+  if (type === 'ingredients_sheet') return 'Ingredients Sheet'
+  if (type === 'srt') return 'SRT'
+  return type ? type.charAt(0).toUpperCase() + type.slice(1) : 'Asset'
+}
 
 /**
  * MaskPreview - Component for previewing mask assets with frame-by-frame playback
@@ -830,8 +838,8 @@ function PreviewPanel() {
   // Register video ref with store (for asset preview mode - only for video assets)
   // Use a timeout to ensure the video element is mounted after switching previews
   useEffect(() => {
-    // Only register video ref for video assets (not masks or images)
-    const isVideoAsset = currentPreview && currentPreview.type !== 'mask' && currentPreview.type !== 'image'
+    // Only register video ref for playable asset previews.
+    const isVideoAsset = currentPreview && (currentPreview.type === 'video' || currentPreview.type === 'audio')
     
     if (previewMode === 'asset' && isVideoAsset) {
       // Use a small timeout to ensure video element is mounted after state change
@@ -1168,7 +1176,7 @@ function PreviewPanel() {
   
   // Handle add to timeline
   const handleAddToTimeline = () => {
-    if (currentPreview) {
+    if (currentPreview && isTimelineAddablePreviewType(currentPreview.type)) {
       addClip('video-1', currentPreview, null, timelineSettings?.fps)
       setJustAdded(true)
       setTimeout(() => setJustAdded(false), 2000)
@@ -1581,7 +1589,7 @@ function PreviewPanel() {
         toggleFullscreen()
         break
       case 'add-to-timeline':
-        if (currentPreview) {
+        if (currentPreview && isTimelineAddablePreviewType(currentPreview.type)) {
           addClip('video-1', currentPreview, null, timelineSettings?.fps)
           setJustAdded(true)
           setTimeout(() => setJustAdded(false), 2000)
@@ -2332,7 +2340,7 @@ function PreviewPanel() {
                     onTimeUpdate={handleMaskTimeUpdate}
                     onEnded={handleMaskEnded}
                   />
-                ) : currentPreview.type === 'image' ? (
+                ) : isImagePreviewAssetType(currentPreview.type) ? (
                   <img
                     src={currentPreview.url}
                     alt={currentPreview.name}
@@ -2343,6 +2351,21 @@ function PreviewPanel() {
                     }}
                     onContextMenu={(e) => e.preventDefault()}
                   />
+                ) : currentPreview.type === 'srt' ? (
+                  <div className="flex h-full w-full items-center justify-center bg-sf-dark-950 p-6">
+                    <div className="max-w-2xl rounded-lg border border-sf-dark-700 bg-sf-dark-900/80 p-5 text-left shadow-lg">
+                      <div className="flex items-center gap-3 text-sf-text-primary">
+                        <FileText className="h-6 w-6 text-sf-accent" />
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold">{currentPreview.name || 'SRT file'}</div>
+                          <div className="text-xs text-sf-text-muted">Subtitle asset</div>
+                        </div>
+                      </div>
+                      <pre className="mt-4 max-h-64 overflow-auto whitespace-pre-wrap rounded border border-sf-dark-700 bg-sf-dark-950 p-3 text-xs leading-5 text-sf-text-secondary">
+                        {String(currentPreview.text || currentPreview.rawText || 'SRT text is stored on disk for this asset.').slice(0, 4000)}
+                      </pre>
+                    </div>
+                  </div>
                 ) : (
                   <>
                     {currentPreview?.settings?.hasAlpha === true && (
@@ -2402,7 +2425,7 @@ function PreviewPanel() {
                       {/* Type Badge */}
                       <div className={`px-2 py-1 rounded text-xs text-white flex items-center gap-1 ${
                         currentPreview.type === 'mask' ? 'bg-purple-600/80' :
-                        currentPreview.type === 'image' ? 'bg-green-600/80' : 
+                        isImagePreviewAssetType(currentPreview.type) ? 'bg-green-600/80' :
                         currentPreview.type === 'audio' ? 'bg-purple-600/80' : 'bg-blue-600/80'
                       }`}>
                         {currentPreview.type === 'mask' ? (
@@ -2410,12 +2433,14 @@ function PreviewPanel() {
                             <circle cx="12" cy="12" r="10"/>
                             <path d="M12 2a10 10 0 0 1 0 20"/>
                           </svg>
-                        ) : currentPreview.type === 'image' ? (
+                        ) : isImagePreviewAssetType(currentPreview.type) ? (
                           <ImageIcon className="w-3 h-3" />
+                        ) : currentPreview.type === 'srt' ? (
+                          <FileText className="w-3 h-3" />
                         ) : (
                           <Film className="w-3 h-3" />
                         )}
-                        {currentPreview.type?.charAt(0).toUpperCase() + currentPreview.type?.slice(1)}
+                        {formatAssetTypeLabel(currentPreview.type)}
                       </div>
                       
                       {/* Resolution/Dimensions */}
@@ -2426,7 +2451,7 @@ function PreviewPanel() {
                       )}
                       
                       {/* Duration (video/audio only - not image or mask) */}
-                      {currentPreview.type !== 'image' && currentPreview.type !== 'mask' && (currentPreview.settings?.duration || currentPreview.duration) && (
+                      {!isImagePreviewAssetType(currentPreview.type) && currentPreview.type !== 'mask' && (currentPreview.settings?.duration || currentPreview.duration) && (
                         <div className="px-2 py-1 bg-sf-dark-900/80 rounded text-xs text-sf-text-muted">
                           {(currentPreview.settings?.duration || currentPreview.duration)?.toFixed(2)}s
                         </div>
@@ -2466,26 +2491,28 @@ function PreviewPanel() {
                       </div>
                     </div>
                     <div className="flex gap-2 pointer-events-auto">
-                      <button 
-                        className={`px-2 py-1 rounded text-xs text-white font-medium flex items-center gap-1 transition-colors ${
-                          justAdded 
-                            ? 'bg-sf-success' 
-                            : 'bg-sf-accent/90 hover:bg-sf-accent'
-                        }`}
-                        onClick={handleAddToTimeline}
-                      >
-                        {justAdded ? (
-                          <>
-                            <Check className="w-3 h-3" />
-                            Added!
-                          </>
-                        ) : (
-                          <>
-                            <Plus className="w-3 h-3" />
-                            Add to Timeline
-                          </>
-                        )}
-                      </button>
+                      {isTimelineAddablePreviewType(currentPreview.type) && (
+                        <button
+                          className={`px-2 py-1 rounded text-xs text-white font-medium flex items-center gap-1 transition-colors ${
+                            justAdded
+                              ? 'bg-sf-success'
+                              : 'bg-sf-accent/90 hover:bg-sf-accent'
+                          }`}
+                          onClick={handleAddToTimeline}
+                        >
+                          {justAdded ? (
+                            <>
+                              <Check className="w-3 h-3" />
+                              Added!
+                            </>
+                          ) : (
+                            <>
+                              <Plus className="w-3 h-3" />
+                              Add to Timeline
+                            </>
+                          )}
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2870,7 +2897,7 @@ function PreviewPanel() {
           
           <div className="h-px bg-sf-dark-600 my-1" />
           
-          {currentPreview && previewMode === 'asset' && (
+          {currentPreview && previewMode === 'asset' && isTimelineAddablePreviewType(currentPreview.type) && (
             <>
               <button
                 onClick={() => handleContextAction('add-to-timeline')}

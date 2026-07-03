@@ -589,6 +589,18 @@ export const WORKFLOW_DEPENDENCY_PACKS = Object.freeze({
         filename: 'ltx-2-19b-lora-camera-control-dolly-out.safetensors',
         targetSubdir: 'loras',
       },
+      {
+        classType: 'Power Lora Loader (rgthree)',
+        inputKey: 'lora',
+        filename: 'LTX-2.3-22b-IC-LoRA-Ingredients.safetensors',
+        targetSubdir: 'loras',
+      },
+      {
+        classType: 'Power Lora Loader (rgthree)',
+        inputKey: 'lora',
+        filename: 'LTX-2.3-Multiple-Subject-Reference.safetensors',
+        targetSubdir: 'loras',
+      },
     ]),
     docsUrl: COMFY_REGISTRY_URL,
   }),

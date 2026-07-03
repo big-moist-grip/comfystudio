@@ -1164,6 +1164,51 @@ function firstDefinedTextValue(...values) {
   return found == null ? '' : String(found)
 }
 
+const MUSIC_VIDEO_SHOT_INPUT_MODES = new Set(['keyframe_image', 'ingredients_sheet'])
+
+function normalizeShotInputMode(value) {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/^["'\u2018\u2019\u201C\u201D]+|["'\u2018\u2019\u201C\u201D]+$/g, '')
+    .trim()
+  return MUSIC_VIDEO_SHOT_INPUT_MODES.has(normalized) ? normalized : 'keyframe_image'
+}
+
+function normalizeShotStringList(value) {
+  let source = value
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text || /^(?:none|n\/a|na|null|empty|\[\])$/i.test(text)) return []
+    if (text.startsWith('[') && text.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(text)
+        if (Array.isArray(parsed)) source = parsed
+      } catch {
+        source = text
+      }
+    }
+    if (!Array.isArray(source)) {
+      source = text.split(/[,;|]/)
+    }
+  }
+  if (!Array.isArray(source)) return []
+  return source
+    .map((entry) => String(entry || '').trim())
+    .map((entry) => entry.replace(/^[\s[\]]+|[\s[\]]+$/g, '').trim())
+    .map((entry) => entry.replace(/^["'\u2018\u2019\u201C\u201D]+|["'\u2018\u2019\u201C\u201D]+$/g, '').trim())
+    .filter((entry) => !/^(?:none|n\/a|na|null|empty|\[\])$/i.test(entry))
+    .filter(Boolean)
+}
+
+function normalizeShotPendingCandidates(value) {
+  if (!Array.isArray(value)) return []
+  return value.map((entry) => (
+    entry && typeof entry === 'object' && !Array.isArray(entry)
+      ? { ...entry }
+      : entry
+  ))
+}
+
 function normalizeShotForScene(sceneId, shot, shotIndex, fallback = {}, options = {}) {
   const minDurationSeconds = Math.max(0.1, Number(options.minDurationSeconds) || 2)
   const maxDurationSeconds = Math.max(minDurationSeconds, Number(options.maxDurationSeconds) || 5)
@@ -1222,6 +1267,11 @@ function normalizeShotForScene(sceneId, shot, shotIndex, fallback = {}, options 
     takesPerAngle: Math.round(takes),
     angles: parsedAngles.length > 0 ? parsedAngles : (fallbackAngles.length > 0 ? fallbackAngles : ['Medium shot']),
     cameraPresetId: String(shot?.cameraPresetId || fallback?.cameraPresetId || 'auto'),
+    input_mode: normalizeShotInputMode(shot?.input_mode ?? fallback?.input_mode),
+    ingredientsSheetAssetId: String(shot?.ingredientsSheetAssetId ?? fallback?.ingredientsSheetAssetId ?? '').trim(),
+    locations: normalizeShotStringList(shot?.locations ?? fallback?.locations),
+    accessories: normalizeShotStringList(shot?.accessories ?? fallback?.accessories),
+    pendingCandidates: normalizeShotPendingCandidates(shot?.pendingCandidates ?? fallback?.pendingCandidates),
   }
 }
 
@@ -1245,6 +1295,27 @@ function normalizePersistedYoloPlan(rawPlan = []) {
       shots: shots.map((shot, shotIndex) => normalizeShotForScene(sceneId, shot, shotIndex, shot)),
     }
   })
+}
+
+function normalizeGenerateWorkspaceYoloState(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const migrated = { ...value }
+  if (Array.isArray(migrated.yoloPlan)) {
+    migrated.yoloPlan = normalizePersistedYoloPlan(migrated.yoloPlan)
+  }
+  if (Array.isArray(migrated.yoloMusicPlan)) {
+    migrated.yoloMusicPlan = normalizePersistedYoloPlan(migrated.yoloMusicPlan)
+  }
+  if (Array.isArray(migrated.yoloMusicAltScripts)) {
+    migrated.yoloMusicAltScripts = migrated.yoloMusicAltScripts.map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry
+      return {
+        ...entry,
+        plan: normalizePersistedYoloPlan(Array.isArray(entry.plan) ? entry.plan : []),
+      }
+    })
+  }
+  return migrated
 }
 
 /**
@@ -1331,7 +1402,8 @@ function composeMusicShotReferencePrompt({
 
 /**
  * Build a music-video plan from a director-format script (ad-style grammar
- * extended with `Lyric moment:`, `Length:`, `Artist:`, and `Start at:`).
+ * extended with `Lyric moment:`, `Length:`, `Artist:`, `Start at:`,
+ * `Input mode:`, `Locations:`, and `Accessories:`).
  *
  * audioStart resolution (Phase 8 — SRT-first):
  *   1. Performance lip-sync shots with a timed `Lyric moment:` use SRT/LRC
@@ -1590,6 +1662,9 @@ function buildMusicVideoPlanFromScript(options = {}) {
       }
       const slot1 = resolvedMembers[0]?.assetId || null
       const slot2 = resolvedMembers[1]?.assetId || null
+      const inputMode = normalizeShotInputMode(scriptShot.inputModeRaw || scriptShot.input_mode)
+      const locations = normalizeShotStringList(scriptShot.locations || scriptShot.locationsRaw)
+      const accessories = normalizeShotStringList(scriptShot.accessories || scriptShot.accessoriesRaw)
 
       const videoPrompt = composeMusicShotVideoPrompt({
         motionPromptRaw: scriptShot.motionPromptRaw || scriptShot.videoBeat,
@@ -1635,6 +1710,11 @@ function buildMusicVideoPlanFromScript(options = {}) {
           takesPerAngle: 1,
           angles: ['Medium shot'],
           cameraPresetId: 'auto',
+          input_mode: inputMode,
+          ingredientsSheetAssetId: '',
+          locations,
+          accessories,
+          pendingCandidates: [],
           // Music-video-specific payload consumed by modifyMusicVideoShotWorkflow.
           musicShotType: shotTypeId,
           coverageType,
@@ -1662,6 +1742,9 @@ function buildMusicVideoPlanFromScript(options = {}) {
           scriptLyricMoment: lyricMomentHint,
           scriptLyricLineIndex: lineIdx,
           scriptArtistRaw: artistOverrideRaw,
+          scriptInputModeRaw: scriptShot.inputModeRaw || '',
+          scriptLocationsRaw: scriptShot.locationsRaw || '',
+          scriptAccessoriesRaw: scriptShot.accessoriesRaw || '',
         }],
       })
 
@@ -2176,6 +2259,15 @@ function buildMusicVideoLLMPrompt(options = {}) {
   ].join('\n') : ''
   if (timelineRules) sections.push(timelineRules)
 
+  sections.push([
+    'Per-shot planning metadata schema (write these values as director-script lines inside every Shot block, not as separate commentary):',
+    '  {',
+    '    "input_mode": "keyframe_image" | "ingredients_sheet",',
+    '    "locations": ["location or setting name"],',
+    '    "accessories": ["prop, wardrobe item, instrument, vehicle, or motif"]',
+    '  }',
+  ].join('\n'))
+
   const rules = [
     'Rules:',
     '  0. The returned script must be self-contained. Put the story, setting, wardrobe, lighting, color, continuity, and camera language directly inside each shot block.',
@@ -2188,10 +2280,13 @@ function buildMusicVideoLLMPrompt(options = {}) {
     '  4b. Environmental_broll and detail_broll shots MUST omit Artist. They should be places, props, textures, hands, silhouettes, or atmosphere, not assigned performer portraits.',
     '  5. For vocal lines, add "Lyric moment:" quoting the specific lyric line. For instrumentals or b_roll, omit Lyric moment.',
     '  6. Use "Artist:" to pick which cast member appears only when that person is visibly present. Omit when the shot is b_roll with no performer visible.',
-    '  7. "Keyframe prompt:" describes the opening still and must include location, subject, wardrobe/props, lighting, color palette, composition, and the subject\'s readable emotional state when a person appears.',
-    '  8. "Motion prompt:" describes what moves in the clip: lip-sync/performance action, character movement, camera movement, atmosphere, and any story action. Include camera motion and character blocking/emotion, not just a static description.',
-    '  9. Keep wardrobe, location, and lighting consistent across adjacent shots unless the script deliberately calls for a hard cut.',
-    '  10. Do NOT invent lyrics. If the song is instrumental at a given moment, omit Lyric moment for that shot.',
+    '  7. Every shot MUST include "Input mode:" with exactly one of these values: "keyframe_image" or "ingredients_sheet". Use "ingredients_sheet" for shots needing strict character, location, wardrobe, prop, or multi-subject consistency; use "keyframe_image" for abstract, dynamic, atmospheric, or one-off imagery.',
+    '  8. Every shot MUST include "Locations:" as a comma-separated list of relevant setting/location names, or "none".',
+    '  9. Every shot MUST include "Accessories:" as a comma-separated list of important props, wardrobe pieces, instruments, vehicles, or visual motifs, or "none".',
+    '  10. "Keyframe prompt:" describes the opening still and must include location, subject, wardrobe/props, lighting, color palette, composition, and the subject\'s readable emotional state when a person appears.',
+    '  11. "Motion prompt:" describes what moves in the clip: lip-sync/performance action, character movement, camera movement, atmosphere, and any story action. Include camera motion and character blocking/emotion, not just a static description.',
+    '  12. Keep wardrobe, location, and lighting consistent across adjacent shots unless the script deliberately calls for a hard cut.',
+    '  13. Do NOT invent lyrics. If the song is instrumental at a given moment, omit Lyric moment for that shot.',
   ]
   sections.push(rules.join('\n'))
 
@@ -2697,6 +2792,9 @@ function buildMusicVideoPassFormatSpec(pass, coveragePlan = null) {
       `Shot 1: ${label}`,
       'Start at: 0:00',
       'Shot type: b_roll',
+      'Input mode: keyframe_image',
+      `Locations: ${pass === 'environmental_broll' ? 'rain-slick alley' : 'stage insert detail'}`,
+      `Accessories: ${pass === 'environmental_broll' ? 'none' : 'guitar strings'}`,
       `Keyframe prompt: ${keyframeA}`,
       `Motion prompt: ${motionA}`,
       'Camera: Slow drift, 35mm lens.',
@@ -2705,6 +2803,9 @@ function buildMusicVideoPassFormatSpec(pass, coveragePlan = null) {
       'Shot 2: Cutaway',
       'Start at: 0:04.5',
       'Shot type: b_roll',
+      'Input mode: ingredients_sheet',
+      `Locations: ${pass === 'environmental_broll' ? 'empty highway' : 'car interior'}`,
+      `Accessories: ${pass === 'environmental_broll' ? 'reflector post' : 'cassette tape'}`,
       `Keyframe prompt: ${keyframeB}`,
       `Motion prompt: ${motionB}`,
       'Camera: Locked-off, 85mm macro.',
@@ -2725,6 +2826,9 @@ function buildMusicVideoPassFormatSpec(pass, coveragePlan = null) {
     'Lyric moment: "You paint your eyelids with correction fluid moons"',
     'Shot type: performance_wide',
     'Artist: rose',
+    'Input mode: ingredients_sheet',
+    'Locations: neon phone booth, rain-slick street',
+    'Accessories: black leather jacket, silver microphone',
     'Keyframe prompt: Singer leans against a neon-lit phone booth, rain-slick street behind her, warm sodium-lamp glow.',
     'Motion prompt: Slow push-in on the singer as she mouths the opening line, rain falling around her, headlights flaring in the distance.',
     'Camera: Slow dolly forward, eye level, 35mm lens.',
@@ -2735,6 +2839,9 @@ function buildMusicVideoPassFormatSpec(pass, coveragePlan = null) {
     'Lyric moment: "Chewed up saints on the floor"',
     'Shot type: performance',
     'Artist: rose',
+    'Input mode: keyframe_image',
+    'Locations: neon phone booth',
+    'Accessories: running mascara',
     'Keyframe prompt: Tight close-up on the singer\'s eyes, mascara starting to run.',
     'Motion prompt: Hold on her face as she sings, slight tilt down to catch a tear.',
     'Camera: Handheld, 85mm, shallow depth of field.',
@@ -3212,7 +3319,7 @@ function migrateGenerateWorkspaceState(value) {
   if (migrated.yoloVideoWorkflowTarget === 'ltx2-i2v' || migrated.yoloVideoWorkflowTarget === 'both') {
     migrated.yoloVideoWorkflowTarget = 'wan22-i2v'
   }
-  return migrated
+  return normalizeGenerateWorkspaceYoloState(migrated)
 }
 
 function getGenerateWorkspaceProjectScope(projectHandle, project) {
@@ -6958,7 +7065,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       if (!data?.promptId) return
       const percent = data.max > 0 ? Math.round((data.value / data.max) * 100) : 0
       updateJobByPromptId(data.promptId, (job) => {
-        if (job.status === 'done' || job.status === 'error') return job
+        if (job.status === 'done' || job.status === 'error' || job.status === 'pending_review') return job
         return {
           ...job,
           status: job.status === 'queued' ? 'running' : job.status,
@@ -6974,10 +7081,13 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
     const handleComplete = (data) => {
       if (!data?.promptId) return
-      updateJobByPromptId(data.promptId, (job) => ({
-        ...job,
-        progress: Math.max(job.progress || 0, 100)
-      }))
+      updateJobByPromptId(data.promptId, (job) => {
+        if (job.status === 'pending_review') return job
+        return {
+          ...job,
+          progress: Math.max(job.progress || 0, 100)
+        }
+      })
     }
 
     comfyui.on('progress', handleProgress)
@@ -7477,7 +7587,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }
 
     for (const job of generationQueue || []) {
-      if (job?.status === 'error') continue
+      if (['error', 'pending_review', 'discarded', 'cancelled', 'canceled'].includes(String(job?.status || ''))) continue
       addYoloKeys(job?.yolo)
     }
 
@@ -8524,6 +8634,56 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }))
   }, [setYoloActivePlan])
 
+  const scheduleProjectSaveAfterWorkspaceStateChange = useCallback(() => {
+    if (!currentProjectHandle) return
+    setTimeout(() => {
+      saveProject().catch((error) => {
+        console.warn('Failed to save project after updating music video review candidates:', error)
+      })
+    }, 0)
+  }, [currentProjectHandle, saveProject])
+
+  const updateYoloMusicShotByMeta = useCallback((yoloMeta = {}, updater) => {
+    const sceneId = String(yoloMeta?.sceneId || '').trim()
+    const shotId = String(yoloMeta?.shotId || '').trim()
+    if (!sceneId || !shotId) return false
+
+    const applyToPlan = (plan = []) => {
+      let changed = false
+      const nextPlan = (Array.isArray(plan) ? plan : []).map((scene) => {
+        if (String(scene?.id || '') !== sceneId) return scene
+        const nextShots = (scene.shots || []).map((shot, shotIndex) => {
+          if (String(shot?.id || '') !== shotId) return normalizeShotForScene(scene.id, shot, shotIndex, shot)
+          const updatedShot = typeof updater === 'function'
+            ? updater(shot, shotIndex, scene)
+            : { ...shot, ...(updater || {}) }
+          changed = true
+          return normalizeShotForScene(scene.id, updatedShot, shotIndex, shot)
+        })
+        return { ...scene, shots: nextShots }
+      })
+      return { nextPlan, changed }
+    }
+
+    const altSlotId = String(yoloMeta?.pass?.altSlotId || '').trim()
+    if (altSlotId) {
+      setYoloMusicAltScripts((prev) => prev.map((entry) => {
+        if (entry.id !== altSlotId) return entry
+        const { nextPlan, changed } = applyToPlan(entry.plan)
+        return changed ? { ...entry, plan: nextPlan } : entry
+      }))
+      scheduleProjectSaveAfterWorkspaceStateChange()
+      return true
+    }
+
+    setYoloMusicPlan((prev) => {
+      const { nextPlan, changed } = applyToPlan(prev)
+      return changed ? nextPlan : prev
+    })
+    scheduleProjectSaveAfterWorkspaceStateChange()
+    return true
+  }, [scheduleProjectSaveAfterWorkspaceStateChange])
+
   const handleYoloShotImageBeatChange = useCallback((sceneId, shotId, value) => {
     updateYoloShot(sceneId, shotId, (shot) => ({ ...shot, imageBeat: value }))
   }, [updateYoloShot])
@@ -8544,6 +8704,21 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         nextShot.nanoBananaReferenceOverrideEnabled = false
         nextShot.nanoBananaReferenceAssetId1 = ''
         nextShot.nanoBananaReferenceAssetId2 = ''
+      }
+      return nextShot
+    })
+  }, [updateYoloShot])
+
+  const handleYoloShotInputChange = useCallback((sceneId, shotId, patch = {}) => {
+    updateYoloShot(sceneId, shotId, (shot) => {
+      const nextShot = { ...shot }
+      if (Object.prototype.hasOwnProperty.call(patch, 'input_mode')) {
+        const nextMode = normalizeShotInputMode(patch.input_mode)
+        nextShot.input_mode = nextMode
+        if (nextMode === 'keyframe_image') nextShot.ingredientsSheetAssetId = ''
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'ingredientsSheetAssetId')) {
+        nextShot.ingredientsSheetAssetId = String(patch.ingredientsSheetAssetId || '').trim()
       }
       return nextShot
     })
@@ -10471,8 +10646,17 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       height: Number(resolutionOverride?.height) || resolution.height,
     }
     for (const variant of variantsToQueue) {
+      const musicShot = isYoloMusicMode ? musicShotByKey.get(variant.key) : null
+      const inputMode = normalizeShotInputMode(musicShot?.input_mode)
       const storyboardAsset = yoloStoryboardAssetMap.get(variant.key)
-      if (!storyboardAsset) {
+      const ingredientsSheetAsset = isYoloMusicMode && inputMode === 'ingredients_sheet'
+        ? assets.find((asset) => (
+          asset?.id === musicShot?.ingredientsSheetAssetId
+          && asset?.type === 'ingredients_sheet'
+        )) || null
+        : null
+      const videoInputAsset = inputMode === 'ingredients_sheet' ? ingredientsSheetAsset : storyboardAsset
+      if (!videoInputAsset) {
         missing += 1
         continue
       }
@@ -10497,7 +10681,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       const videoAssetFieldIds = isSeedanceUgcVideo
         ? (() => {
           const acc = normalizedVideoReferenceAssetIds
-            .filter((assetId) => assetId !== storyboardAsset.id)
+            .filter((assetId) => assetId !== videoInputAsset.id)
             .slice(0, 3)
             .reduce((map, assetId, index) => {
               map[`referenceImage${index + 2}`] = assetId
@@ -10517,13 +10701,15 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
       // Music-video-specific payload threaded into the job, consumed by the
       // music-video case in runJob's switch.
-      const musicShot = isYoloMusicMode ? musicShotByKey.get(variant.key) : null
       const musicShotPayload = musicShot ? normalizeMusicVideoShot({
         shotType: musicShot.musicShotType,
         audioStart: musicShot.audioStart,
         length: musicShot.length || musicShot.durationSeconds,
         shotPrompt: musicShot.shotPrompt || musicShot.videoBeat || musicShot.beat,
         referenceImagePrompt: musicShot.referenceImagePrompt,
+        inputMode,
+        input_mode: inputMode,
+        ingredientsSheetAssetId: ingredientsSheetAsset?.id || musicShot.ingredientsSheetAssetId || '',
       }) : isAdLipSyncShot ? normalizeMusicVideoShot({
         shotType: 'performance',
         audioStart: 0,
@@ -10590,8 +10776,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           ? `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Video (${customVideoWorkflowName})`
           : `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Video (${getWorkflowDisplayLabel(effectiveWorkflowId)})`,
         needsImage: true,
-        inputAssetId: storyboardAsset.id,
-        inputAssetName: storyboardAsset.name || variant.key,
+        inputAssetId: videoInputAsset.id,
+        inputAssetName: videoInputAsset.name || variant.key,
         inputFromTimelineFrame: false,
         prompt: musicShotPayload?.shotPrompt || seedanceUgcPrompt || adVideoPrompt || variant.videoPrompt || variant.prompt,
         negativePrompt: !isYoloMusicMode
@@ -10643,6 +10829,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           // inherit the same badge/filename token as their keyframe.
           pass: (isYoloMusicMode && variant?.pass && typeof variant.pass === 'object') ? variant.pass : null,
           coverage: (isYoloMusicMode && variant?.coverage && typeof variant.coverage === 'object') ? variant.coverage : null,
+          inputMode: isYoloMusicMode ? inputMode : 'keyframe_image',
+          ingredientsSheetAssetId: isYoloMusicMode ? (ingredientsSheetAsset?.id || '') : '',
         },
       }))
     }
@@ -10656,7 +10844,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                 ? 'Selected shot video is already queued/running. Wait for it to finish, then try again.'
                 : 'All selected video variants are already in this queue/run.'
             )
-            : 'No keyframe images found yet. Queue or re-render keyframes first, then queue video.'
+            : 'Missing keyframe image or ingredients sheet for the selected shots. Attach the required input, then queue video.'
         )
       }
       return 0
@@ -10671,7 +10859,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }
 
     setGenerationQueue(prev => [...prev, ...jobs])
-    setFormError(missing > 0 ? `Queued ${jobs.length} video jobs (${missing} variants still missing keyframe images)` : null)
+    setFormError(missing > 0 ? `Queued ${jobs.length} video jobs (${missing} variants still missing keyframe images or ingredients sheets)` : null)
     addComfyLog('status', `${sourceLabel} queued: ${jobs.length} job${jobs.length === 1 ? '' : 's'}${missing > 0 ? ` (${missing} missing)` : ''}`)
     return jobs.length
   }, [
@@ -11978,6 +12166,70 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }
   }
 
+  const isMusicVideoVideoJob = (job, result = null) => (
+    job?.yolo?.mode === 'music'
+    && job?.yolo?.stage === 'video'
+    && (!result || result.type === 'video')
+  )
+
+  const buildMusicVideoPendingCandidate = (result, job) => {
+    if (!isMusicVideoVideoJob(job, result) || !result?.filename) return null
+    const candidateId = `mvc_candidate_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const videoResult = {
+      type: 'video',
+      filename: String(result.filename || ''),
+      subfolder: String(result.subfolder || ''),
+      outputType: String(result.outputType || 'output'),
+    }
+    const yoloMeta = job?.yolo && typeof job.yolo === 'object' ? { ...job.yolo } : {}
+    return {
+      id: candidateId,
+      type: 'video',
+      status: 'pending_review',
+      url: comfyui.getMediaUrl(videoResult.filename, videoResult.subfolder, videoResult.outputType),
+      result: videoResult,
+      workflowId: job?.workflowId || yoloMeta.workflowId || '',
+      workflowLabel: job?.workflowLabel || '',
+      prompt: job?.prompt || '',
+      seed: job?.seed ?? null,
+      createdAt: new Date().toISOString(),
+      yolo: yoloMeta,
+      settings: {
+        duration: job?.duration,
+        fps: job?.fps,
+        resolution: job?.resolution,
+        inputAssetId: job?.inputAssetId || undefined,
+      },
+      jobSnapshot: {
+        workflowId: job?.workflowId || yoloMeta.workflowId || '',
+        workflowLabel: job?.workflowLabel || '',
+        prompt: job?.prompt || '',
+        duration: job?.duration,
+        fps: job?.fps,
+        resolution: job?.resolution,
+        seed: job?.seed,
+        inputAssetId: job?.inputAssetId || undefined,
+        inputAssetName: job?.inputAssetName || undefined,
+        yolo: yoloMeta,
+        musicShot: job?.musicShot || undefined,
+      },
+    }
+  }
+
+  const addMusicVideoPendingCandidate = (result, job) => {
+    const candidate = buildMusicVideoPendingCandidate(result, job)
+    if (!candidate) return null
+    updateYoloMusicShotByMeta(candidate.yolo, (shot) => ({
+      ...shot,
+      pendingCandidates: [
+        ...normalizeShotPendingCandidates(shot?.pendingCandidates),
+        candidate,
+      ],
+    }))
+    addComfyLog('ok', `Video candidate ready for review: ${buildDirectorAssetDisplayName(candidate.yolo, candidate.workflowId) || candidate.result.filename}`)
+    return candidate
+  }
+
   // Save generation result to project assets
   const saveGenerationResult = async (result, wfId, job) => {
     const targetProjectHandle = job?.originProject?.handle || currentProjectHandle
@@ -12268,6 +12520,85 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     })
   }, [])
 
+  const removeMusicVideoPendingCandidate = useCallback((candidate, fallback = {}) => {
+    const candidateId = String(candidate?.id || fallback?.candidateId || '').trim()
+    const yoloMeta = candidate?.yolo || fallback?.yolo || {
+      mode: 'music',
+      stage: 'video',
+      sceneId: fallback?.sceneId,
+      shotId: fallback?.shotId,
+    }
+    if (!candidateId) return
+    updateYoloMusicShotByMeta(yoloMeta, (shot) => ({
+      ...shot,
+      pendingCandidates: normalizeShotPendingCandidates(shot?.pendingCandidates)
+        .filter((entry) => String(entry?.id || '') !== candidateId),
+    }))
+  }, [updateYoloMusicShotByMeta])
+
+  const handleConfirmYoloMusicVideoCandidate = async ({ sceneId = '', shotId = '', candidate = null } = {}) => {
+    if (!candidate?.result?.filename) {
+      throw new Error('This candidate no longer has a ComfyUI output reference.')
+    }
+    const yoloMeta = candidate.yolo || {
+      mode: 'music',
+      stage: 'video',
+      sceneId,
+      shotId,
+    }
+    const jobSnapshot = {
+      ...(candidate.jobSnapshot || {}),
+      workflowId: candidate.workflowId || candidate.jobSnapshot?.workflowId || yoloMeta.workflowId || yoloMusicVideoWorkflowId,
+      workflowLabel: candidate.workflowLabel || candidate.jobSnapshot?.workflowLabel || '',
+      prompt: candidate.prompt || candidate.jobSnapshot?.prompt || '',
+      duration: candidate.settings?.duration ?? candidate.jobSnapshot?.duration,
+      fps: candidate.settings?.fps ?? candidate.jobSnapshot?.fps,
+      resolution: candidate.settings?.resolution ?? candidate.jobSnapshot?.resolution,
+      seed: candidate.seed ?? candidate.jobSnapshot?.seed,
+      inputAssetId: candidate.settings?.inputAssetId || candidate.jobSnapshot?.inputAssetId || undefined,
+      yolo: yoloMeta,
+      musicShot: candidate.jobSnapshot?.musicShot || undefined,
+    }
+    const saveResult = await saveGenerationResult(candidate.result, jobSnapshot.workflowId, jobSnapshot)
+    const importedAssets = saveResult?.importedAssets || []
+    if (!saveResult?.didImportAny || importedAssets.length === 0) {
+      throw new Error('Candidate could not be imported as a final video asset.')
+    }
+    removeMusicVideoPendingCandidate(candidate, { sceneId, shotId, yolo: yoloMeta })
+    rememberLatestWorkflowPreview(jobSnapshot, importedAssets)
+    setGenerationQueue((prev) => prev.map((job) => (
+      job?.pendingCandidateId === candidate.id
+        ? {
+          ...job,
+          status: 'done',
+          progress: 100,
+          pendingCandidate: null,
+          resultAssetIds: importedAssets.map((asset) => asset?.id).filter(Boolean),
+        }
+        : job
+    )))
+    addComfyLog('ok', `Confirmed music video candidate: ${importedAssets[0]?.name || candidate.result.filename}`)
+    return importedAssets[0]
+  }
+
+  const handleDiscardYoloMusicVideoCandidate = ({ sceneId = '', shotId = '', candidate = null } = {}) => {
+    removeMusicVideoPendingCandidate(candidate, { sceneId, shotId })
+    if (candidate?.id) {
+      setGenerationQueue((prev) => prev.map((job) => (
+        job?.pendingCandidateId === candidate.id
+          ? {
+            ...job,
+            status: 'discarded',
+            progress: 100,
+            pendingCandidate: null,
+            error: 'Candidate discarded',
+          }
+          : job
+      )))
+    }
+    addComfyLog('status', `Discarded music video candidate${candidate?.result?.filename ? `: ${candidate.result.filename}` : ''}`)
+  }
+
   const handleCreateAngleSheetForJob = useCallback(async (job) => {
     if (!job || !Array.isArray(job.resultAssetIds) || job.resultAssetIds.length === 0) return
     const targetProjectHandle = job?.originProject?.handle || currentProjectHandle
@@ -12533,6 +12864,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
         if (result) {
           updateJob(job.id, { status: 'saving', progress: 95 })
+          if (isMusicVideoVideoJob(job, result)) {
+            const candidate = addMusicVideoPendingCandidate(result, job)
+            if (!candidate) throw new Error('Music video candidate could not be recorded for review.')
+            updateJob(job.id, {
+              status: 'pending_review',
+              progress: 100,
+              restoredFromLedger: false,
+              pendingCandidateId: candidate.id,
+              pendingCandidate: candidate,
+              resultAssetIds: [],
+            })
+            return
+          }
           const saveResult = await saveGenerationResult(result, job.workflowId, job)
           importedAssets = saveResult?.importedAssets || []
           if (!saveResult?.didImportAny) {
@@ -12578,7 +12922,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             const inputUrl = await getJobAssetUrl(inputAsset)
             if (!inputUrl) throw new Error('Input video is not accessible')
             fileToUpload = await extractFrameAsFile(inputUrl, job.frameTime || 0, `frame_${Date.now()}.png`)
-          } else if (inputAsset.type === 'image') {
+          } else if (inputAsset.type === 'image' || inputAsset.type === 'ingredients_sheet') {
             fileToUpload = await createFileFromJobAsset(inputAsset, `input_${Date.now()}.png`)
           }
           if (!fileToUpload) throw new Error('Unsupported input asset')
@@ -12854,6 +13198,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
               seed: job.seed,
             },
             inputImage: uploadedFilename,
+            inputIngredients: job.musicShot?.inputMode === 'ingredients_sheet' || job.musicShot?.input_mode === 'ingredients_sheet'
+              ? uploadedFilename
+              : '',
             inputAudio: uploadedAudioFilename,
             useVocalsOnly,
             width: job.resolution?.width,
@@ -13159,6 +13506,18 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       // Save result to assets
       if (result) {
         updateJob(job.id, { status: 'saving', progress: 95 })
+        if (isMusicVideoVideoJob(job, result)) {
+          const candidate = addMusicVideoPendingCandidate(result, job)
+          if (!candidate) throw new Error('Music video candidate could not be recorded for review.')
+          updateJob(job.id, {
+            status: 'pending_review',
+            progress: 100,
+            pendingCandidateId: candidate.id,
+            pendingCandidate: candidate,
+            resultAssetIds: [],
+          })
+          return
+        }
         const saveResult = await saveGenerationResult(result, job.workflowId, job)
         importedAssets = saveResult?.importedAssets || []
         if (!saveResult?.didImportAny) {
@@ -14115,8 +14474,11 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     handleQueueYoloVideos={handleQueueYoloVideos}
                     handleQueueYoloShotVideo={handleQueueYoloShotVideo}
                     handleQueueYoloShotVideos={handleQueueYoloShotVideos}
+                    handleConfirmYoloMusicVideoCandidate={handleConfirmYoloMusicVideoCandidate}
+                    handleDiscardYoloMusicVideoCandidate={handleDiscardYoloMusicVideoCandidate}
                     handleYoloShotImageBeatChange={handleYoloShotImageBeatChange}
                     handleYoloShotNanoBananaReferencesChange={handleYoloShotNanoBananaReferencesChange}
+                    handleYoloShotInputChange={handleYoloShotInputChange}
                     handleYoloShotVideoBeatChange={handleYoloShotVideoBeatChange}
                     handleCopyMusicVideoLlmPrompt={handleCopyMusicVideoLlmPrompt}
                     handleAssembleMusicVideoTimeline={handleAssembleMusicVideoTimeline}
@@ -16558,7 +16920,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                   : job.status === 'queuing' ? 'Queued in ComfyUI'
                   : job.status === 'running' ? 'Generating'
                   : job.status === 'saving' ? 'Saving to project'
+                  : job.status === 'pending_review' ? 'Pending review'
                   : job.status === 'done' ? 'Complete'
+                  : job.status === 'discarded' ? 'Discarded'
                   : job.status === 'error' ? 'Failed'
                   : job.status
                 const isStaleOutputError = typeof job.error === 'string'

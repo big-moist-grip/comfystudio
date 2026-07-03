@@ -48,7 +48,7 @@ const queueProjectPosterSave = (projectPath, delayMs = 1200) => {
  * {
  *   id: string,
  *   name: string,
- *   type: 'video' | 'audio' | 'image' | 'mask',
+ *   type: 'video' | 'audio' | 'image' | 'mask' | 'srt' | 'ingredients_sheet',
  *   url: string (blob URL for playback),
  *   path: string (relative path in project for imported assets),
  *   createdAt: ISO string,
@@ -59,6 +59,7 @@ const queueProjectPosterSave = (projectPath, delayMs = 1200) => {
  *   mimeType: string,
  *   size: number,
  *   folderId: string | null (folder organization),
+ *   text/rawText: string (for SRT assets when available),
  *   
  *   // Mask-specific fields:
  *   sourceAssetId: string (for masks - the asset the mask was generated from),

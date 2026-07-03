@@ -348,7 +348,7 @@ const WORKFLOW_DISPLAY_LABELS = Object.freeze({
   'seedance2-flf2v': 'Seedance 2.0 First/Last Frame',
   'seedance2-r2v': 'Seedance 2.0 Reference to Video',
   [TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID]: 'Topaz Video Upscale',
-  [MUSIC_VIDEO_SHOT_WORKFLOW_ID]: 'LTX 2.3 Music Video (Image + Audio)',
+  [MUSIC_VIDEO_SHOT_WORKFLOW_ID]: 'LTX 2.3 Music Video (Dual Input + Audio)',
   [CUSTOM_GENERATE_IMAGE_WORKFLOW_ID]: 'Custom Image Workflow',
   [CUSTOM_GENERATE_VIDEO_WORKFLOW_ID]: 'Custom Video Workflow',
   [CUSTOM_AD_KEYFRAME_WORKFLOW_ID]: 'Custom Ad Keyframe Workflow',

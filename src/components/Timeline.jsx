@@ -2931,11 +2931,13 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
   const canDropAssetOnTrack = (asset, track) => {
     if (!asset || !track) return false
     const isVideoAsset = asset.type === 'video' || asset.type === 'image'
+    const isAudioAsset = asset.type === 'audio'
     const isVideoTrack = track.type === 'video'
+    const isAudioTrack = track.type === 'audio'
     // The dedicated captions track only accepts caption overlay assets.
     const assetIsCaption = !!(asset.settings?.captionScope || asset.settings?.overlayKind === 'captions' || asset.settings?.source === 'captions')
     if (track.role === 'captions') return assetIsCaption
-    return (isVideoAsset && isVideoTrack) || (!isVideoAsset && !isVideoTrack)
+    return (isVideoAsset && isVideoTrack) || (isAudioAsset && isAudioTrack)
   }
 
   const resolveVideoAssetHasAudio = useCallback(async (asset) => {

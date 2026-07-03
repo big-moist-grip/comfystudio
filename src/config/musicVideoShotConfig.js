@@ -233,6 +233,9 @@ export const MUSIC_VIDEO_SHOT_TYPE_ALIASES = Object.freeze({
 export const MUSIC_VIDEO_SCRIPT_TEMPLATE = `Shot 1: Highway flight
 Start at: 0:00
 Shot type: b_roll
+Input mode: keyframe_image
+Locations: neon city street, rain-streaked car window
+Accessories: car window, distant headlights
 Keyframe prompt: Neon-lit city streets flying past a rain-streaked car window at night, motion blur on distant headlights, cool cyan and magenta light bleed.
 Motion prompt: Camera drifts forward along the window, neon reflections slide diagonally across the glass, rain catches the light.
 Camera: Handheld forward dolly, slight roll
@@ -243,6 +246,9 @@ Start at: 0:03
 Artist: rose
 Lyric moment: "You paint your eyelids with correction fluid moons"
 Shot type: performance
+Input mode: ingredients_sheet
+Locations: car interior, night highway
+Accessories: warm key light, steering wheel
 Keyframe prompt: Close-up of the singer in the driver's seat, interior dim, a single warm key light across the face, eyes fixed forward on the road.
 Motion prompt: Singer lip-syncs the line naturally, a subtle head tilt and a single slow blink, no big motion.
 Camera: Locked medium close-up, shallow focus
@@ -253,6 +259,9 @@ Start at: 0:07
 Artist: jake
 Lyric moment: "Swollen sound inside my head"
 Shot type: performance_wide
+Input mode: ingredients_sheet
+Locations: car interior, rear window neon
+Accessories: steering wheel, passing neon signs
 Keyframe prompt: Three-quarter wide of the singer framed by the car interior, blurred neon signs streaming past through the rear window.
 Motion prompt: Gentle forward lean, shoulder sway on the downbeat, hand taps the wheel once on the accent.
 Camera: Slow push-in from the passenger side, shallow focus
@@ -263,6 +272,9 @@ Start at: 0:10
 Artist: both
 Lyric moment: "We're only halfway home"
 Shot type: performance_wide
+Input mode: ingredients_sheet
+Locations: car front seats, neon windshield
+Accessories: windshield neon streaks, warm dashboard glow
 Keyframe prompt: Two-shot of both singers side by side in the front seats, warm interior glow, windshield reflecting neon streaks.
 Motion prompt: Both sing together, heads angled slightly toward each other on the held note, subtle sway on the beat.
 Camera: Locked two-shot, shallow focus
@@ -271,6 +283,9 @@ Length: 3
 Shot 5: Exit cut
 Start at: 0:13
 Shot type: b_roll
+Input mode: keyframe_image
+Locations: empty highway at night
+Accessories: red taillights
 Keyframe prompt: Overhead shot of the empty highway at night, taillights trailing red streaks into vanishing point.
 Motion prompt: Camera holds steady, taillights extend and fade as the car pulls away.
 Camera: Locked overhead, static
@@ -279,6 +294,10 @@ Length: 2
 # Tip: "Start at:" is authoritative — if you paste an SRT, use the real
 # timing from it. "Artist:" matches your Cast roster by slug ("rose",
 # "jake") or by "both" / "all" / "band" to feature every cast member.
+# "Input mode:" must be exactly "keyframe_image" or "ingredients_sheet".
+# Use ingredients_sheet when the shot depends on strict character, location,
+# wardrobe, prop, or multi-subject continuity. "Locations:" and "Accessories:"
+# are comma-separated lists, or "none".
 # The script is the creative source of truth: put story, setting, wardrobe,
 # lighting, color palette, continuity, and camera style directly in each
 # Keyframe prompt and Motion prompt.

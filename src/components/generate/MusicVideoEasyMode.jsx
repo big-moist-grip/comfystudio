@@ -557,8 +557,11 @@ export default function MusicVideoEasyMode({
   handleQueueYoloVideos,
   handleQueueYoloShotVideo,
   handleQueueYoloShotVideos,
+  handleConfirmYoloMusicVideoCandidate,
+  handleDiscardYoloMusicVideoCandidate,
   handleYoloShotImageBeatChange,
   handleYoloShotNanoBananaReferencesChange,
+  handleYoloShotInputChange,
   handleYoloShotVideoBeatChange,
   handleCopyMusicVideoLlmPrompt,
   handleAssembleMusicVideoTimeline,
@@ -599,6 +602,9 @@ export default function MusicVideoEasyMode({
   const [replaceVideoTarget, setReplaceVideoTarget] = useState(null)
   const [videoReplacementAssetId, setVideoReplacementAssetId] = useState('')
   const [videoReplacementBusy, setVideoReplacementBusy] = useState(false)
+  const [attachIngredientsTarget, setAttachIngredientsTarget] = useState(null)
+  const [ingredientsSheetAssetId, setIngredientsSheetAssetId] = useState('')
+  const [pendingCandidateBusyId, setPendingCandidateBusyId] = useState('')
   const [peopleWizard, setPeopleWizard] = useState(null)
   const replacementFileInputRef = useRef(null)
   const videoReplacementFileInputRef = useRef(null)
@@ -657,6 +663,15 @@ export default function MusicVideoEasyMode({
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [replaceVideoTarget])
+
+  useEffect(() => {
+    if (!attachIngredientsTarget) return
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setAttachIngredientsTarget(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [attachIngredientsTarget])
 
   const closePeopleWizard = () => setPeopleWizard(null)
   const handlePeopleWizardBackdropClick = (event) => {
@@ -873,6 +888,15 @@ export default function MusicVideoEasyMode({
     }
     return map
   }, [assets])
+  const ingredientsSheetAssets = useMemo(() => (
+    (assets || [])
+      .filter((asset) => asset?.type === 'ingredients_sheet')
+      .sort((a, b) => new Date(b?.createdAt || b?.imported || 0).getTime() - new Date(a?.createdAt || a?.imported || 0).getTime())
+  ), [assets])
+  const selectedIngredientsSheetAsset = useMemo(
+    () => ingredientsSheetAssets.find((asset) => asset?.id === ingredientsSheetAssetId) || null,
+    [ingredientsSheetAssetId, ingredientsSheetAssets]
+  )
   const plannedShotCount = flatShots.length
   const queueVariantCount = Array.isArray(yoloQueueVariants) ? yoloQueueVariants.length : 0
   const videoReadyCount = useMemo(
@@ -921,7 +945,18 @@ export default function MusicVideoEasyMode({
   const customKeyframeReady = !customKeyframeWorkflowSelected || Boolean(customKeyframeValidation.ok)
   const customVideoReady = !customVideoWorkflowSelected || Boolean(customVideoValidation.ok)
   const canQueueKeyframes = plannedShotCount > 0 && !yoloActivePlanIsStale && customKeyframeReady
-  const canQueueVideos = canQueueKeyframes && yoloStoryboardReadyCount > 0 && customVideoReady
+  const videoInputReadyCount = useMemo(() => (
+    flatShots.filter(({ scene, shot }) => {
+      const inputMode = String(shot?.input_mode || 'keyframe_image')
+      if (inputMode === 'ingredients_sheet') {
+        const assetId = String(shot?.ingredientsSheetAssetId || '').trim()
+        return Boolean(assetId && ingredientsSheetAssets.some((asset) => asset?.id === assetId))
+      }
+      const variant = variantByShotKey.get(`${scene?.id || ''}|${shot?.id || ''}`)
+      return Boolean(variant?.key && yoloStoryboardAssetMap?.has(variant.key))
+    }).length
+  ), [flatShots, ingredientsSheetAssets, variantByShotKey, yoloStoryboardAssetMap])
+  const canQueueVideos = plannedShotCount > 0 && !yoloActivePlanIsStale && videoInputReadyCount > 0 && customVideoReady
   const normalizedSelectedShotIndexes = useMemo(() => {
     if (flatShots.length === 0) return []
     const valid = (Array.isArray(selectedShotIndexes) ? selectedShotIndexes : [])
@@ -939,6 +974,9 @@ export default function MusicVideoEasyMode({
       .map((index) => ({ ...(flatShots[index] || {}), index }))
       .filter((row) => row?.scene && row?.shot)
   ), [flatShots, normalizedSelectedShotIndexes])
+  const selectedIncludesIngredientsMode = selectedShotRows.some((row) => (
+    String(row?.shot?.input_mode || 'keyframe_image') === 'ingredients_sheet'
+  ))
   const hasMultipleSelectedShots = selectedShotRows.length > 1
   const selectedShotCount = selectedShotRows.length
   const selectedShotRow = selectedShotRows[0] || flatShots[selectedShotIndex] || flatShots[0] || null
@@ -947,6 +985,7 @@ export default function MusicVideoEasyMode({
   const singleVideoActionDisabled = isQueuingVideos || yoloDependencyCheckInProgress || !customVideoReady
   const replaceKeyframeActionDisabled = replacementBusy || !handleReplaceYoloMusicKeyframe || yoloActivePlanIsStale || plannedShotCount === 0
   const replaceVideoActionDisabled = videoReplacementBusy || !handleReplaceYoloMusicVideo || yoloActivePlanIsStale || plannedShotCount === 0
+  const attachIngredientsActionDisabled = !handleYoloShotInputChange || yoloActivePlanIsStale || plannedShotCount === 0
   const canOpenCustomKeyframeWorkflow = !customKeyframeWorkflowLoaded || Boolean(customKeyframeValidation.ok)
   const canOpenCustomVideoWorkflow = !customVideoWorkflowLoaded || Boolean(customVideoValidation.ok)
   const replacementImageAssets = useMemo(() => (
@@ -1122,6 +1161,51 @@ export default function MusicVideoEasyMode({
     variantByShotKey.get(`${sceneId || ''}|${shotId || ''}`) || null
   )
 
+  const getShotInputMode = (shot) => (
+    String(shot?.input_mode || 'keyframe_image') === 'ingredients_sheet'
+      ? 'ingredients_sheet'
+      : 'keyframe_image'
+  )
+
+  const getIngredientsSheetAssetForShot = (shot) => {
+    const assetId = String(shot?.ingredientsSheetAssetId || '').trim()
+    if (!assetId) return null
+    return ingredientsSheetAssets.find((asset) => asset?.id === assetId) || null
+  }
+
+  const shotHasVideoInput = (row, variant = null) => {
+    if (!row?.shot) return false
+    if (getShotInputMode(row.shot) === 'ingredients_sheet') {
+      return Boolean(getIngredientsSheetAssetForShot(row.shot))
+    }
+    const resolvedVariant = variant || getVariantForShot(row.scene?.id, row.shot?.id)
+    return Boolean(resolvedVariant?.key && yoloStoryboardAssetMap?.has(resolvedVariant.key))
+  }
+
+  const getMissingVideoInputMessage = (row, index = null) => {
+    const shotLabel = Number.isInteger(index) ? `Shot ${index + 1}` : 'This shot'
+    return getShotInputMode(row?.shot) === 'ingredients_sheet'
+      ? `${shotLabel} needs an ingredients sheet before video can run.`
+      : `${shotLabel} needs a keyframe before video can run.`
+  }
+
+  const getShotPendingCandidates = (shot) => (
+    Array.isArray(shot?.pendingCandidates)
+      ? shot.pendingCandidates.filter((candidate) => candidate?.id)
+      : []
+  )
+
+  const updateShotInput = (row, patch = {}) => {
+    if (!row?.scene?.id || !row?.shot?.id || !handleYoloShotInputChange) return
+    handleYoloShotInputChange(row.scene.id, row.shot.id, patch)
+  }
+
+  const handleShotInputModeChange = (row, inputMode) => {
+    updateShotInput(row, { input_mode: inputMode })
+    setKeyframeStatus('')
+    setVideoStatus('')
+  }
+
   const getVideoAssetForVariant = (variant, workflowId = selectedVideoWorkflowId) => {
     if (!variant?.key) return null
     const scopedKey = getVideoWorkflowScopedKey(variant.key, workflowId)
@@ -1148,10 +1232,13 @@ export default function MusicVideoEasyMode({
     return workflowId === defaultVideoWorkflowId ? videoJobMap.get(variant.key) || null : null
   }
 
-  const getVideoCardState = (variant, asset) => {
+  const getVideoCardState = (variant, asset, pendingCandidates = []) => {
     const job = getVideoJobForVariant(variant)
     if (job && JOB_BUSY_STATUSES.has(String(job.status || '').toLowerCase())) {
       return { state: 'generating', label: 'Generating video', job }
+    }
+    if (Array.isArray(pendingCandidates) && pendingCandidates.length > 0 && !asset) {
+      return { state: 'pending_review', label: 'Review candidate', job }
     }
     if (job && JOB_ERROR_STATUSES.has(String(job.status || '').toLowerCase()) && !asset) {
       return { state: 'error', label: 'Video failed', job }
@@ -1416,6 +1503,92 @@ export default function MusicVideoEasyMode({
     </button>
   )
 
+  const openAttachIngredientsDialog = (row, index) => {
+    if (!row || attachIngredientsActionDisabled) return
+    setSelectedShotIndex(index)
+    setSelectedShotIndexes([index])
+    setSelectionAnchorIndex(index)
+    setMediaPreview(null)
+    setAttachIngredientsTarget({
+      sceneId: row.scene.id,
+      shotId: row.shot.id,
+      shotIndex: index,
+      label: `Shot ${index + 1}: ${row.shot.scriptShotLabel || row.scene.label || row.shot.id}`,
+      existingAssetId: row.shot.ingredientsSheetAssetId || '',
+    })
+    setIngredientsSheetAssetId(row.shot.ingredientsSheetAssetId || '')
+  }
+
+  const closeAttachIngredientsDialog = () => {
+    setAttachIngredientsTarget(null)
+    setIngredientsSheetAssetId('')
+  }
+
+  const handleUseSelectedIngredientsSheet = () => {
+    if (!attachIngredientsTarget) return
+    if (!ingredientsSheetAssetId) {
+      setKeyframeStatus('Choose an ingredients sheet asset for this shot.')
+      return
+    }
+    handleYoloShotInputChange?.(attachIngredientsTarget.sceneId, attachIngredientsTarget.shotId, {
+      input_mode: 'ingredients_sheet',
+      ingredientsSheetAssetId,
+    })
+    setKeyframeStatus(`Attached ingredients sheet for Shot ${attachIngredientsTarget.shotIndex + 1}. Step 5 can use this sheet as the video input.`)
+    closeAttachIngredientsDialog()
+  }
+
+  const renderAttachIngredientsButton = (row, index, label = 'Attach') => (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation()
+        openAttachIngredientsDialog(row, index)
+      }}
+      disabled={attachIngredientsActionDisabled || !row}
+      className="inline-flex shrink-0 items-center gap-1 rounded-md border border-sf-dark-600 bg-sf-dark-900/85 px-2 py-1 text-[10px] font-semibold text-sf-text-secondary transition-colors hover:border-sf-dark-500 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+      title={attachIngredientsActionDisabled ? 'Ingredients sheets cannot be attached right now.' : 'Attach an ingredients reference sheet to this shot'}
+    >
+      <Upload className="h-3 w-3" />
+      {label}
+    </button>
+  )
+
+  const renderShotInputModeControl = (row, compact = false) => {
+    if (!row?.shot) return null
+    const inputMode = getShotInputMode(row.shot)
+    return (
+      <div className={`flex ${compact ? 'items-center gap-1' : 'flex-col gap-1'}`}>
+        {!compact && (
+          <span className="text-[10px] uppercase tracking-wider text-sf-text-muted">Input Mode</span>
+        )}
+        <div className="inline-flex overflow-hidden rounded-md border border-sf-dark-600 bg-sf-dark-950">
+          {[
+            { id: 'keyframe_image', label: compact ? 'Keyframe' : 'Keyframe Image' },
+            { id: 'ingredients_sheet', label: compact ? 'Ingredients' : 'Ingredients Sheet' },
+          ].map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                handleShotInputModeChange(row, option.id)
+              }}
+              disabled={!handleYoloShotInputChange || yoloActivePlanIsStale}
+              className={`px-2 py-1 text-[10px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                inputMode === option.id
+                  ? 'bg-sf-accent text-white'
+                  : 'text-sf-text-secondary hover:bg-sf-dark-800 hover:text-sf-text-primary'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   const updateNanoBananaShotReferences = (row, patch = {}) => {
     if (!row?.scene?.id || !row?.shot?.id || !handleYoloShotNanoBananaReferencesChange) return
     handleYoloShotNanoBananaReferencesChange(row.scene.id, row.shot.id, patch)
@@ -1611,8 +1784,8 @@ export default function MusicVideoEasyMode({
       setVideoStatus(`No video variant found for Shot ${index + 1}. Parse the script again first.`)
       return
     }
-    if (!yoloStoryboardAssetMap?.has(variant.key)) {
-      setVideoStatus(`Shot ${index + 1} needs a keyframe before video can run.`)
+    if (!shotHasVideoInput(row, variant)) {
+      setVideoStatus(getMissingVideoInputMessage(row, index))
       return
     }
     setSelectedShotIndex(index)
@@ -1629,19 +1802,54 @@ export default function MusicVideoEasyMode({
     }
   }
 
+  const handleConfirmPendingCandidate = async (row, index, candidate) => {
+    if (!row || !candidate?.id || !handleConfirmYoloMusicVideoCandidate) return
+    setPendingCandidateBusyId(candidate.id)
+    setVideoStatus(`Confirming candidate for Shot ${index + 1}...`)
+    try {
+      const asset = await handleConfirmYoloMusicVideoCandidate({
+        sceneId: row.scene.id,
+        shotId: row.shot.id,
+        candidate,
+      })
+      setVideoStatus(asset
+        ? `Confirmed Shot ${index + 1}. Assemble Timeline will use the approved clip.`
+        : `Confirmed candidate for Shot ${index + 1}.`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || 'Could not confirm candidate.')
+      setVideoStatus(`Could not confirm candidate: ${message}`)
+    } finally {
+      setPendingCandidateBusyId('')
+    }
+  }
+
+  const handleDiscardPendingCandidate = (row, index, candidate) => {
+    if (!row || !candidate?.id || !handleDiscardYoloMusicVideoCandidate) return
+    handleDiscardYoloMusicVideoCandidate({
+      sceneId: row.scene.id,
+      shotId: row.shot.id,
+      candidate,
+    })
+    setVideoStatus(`Discarded candidate for Shot ${index + 1}.`)
+  }
+
+  const handleRerollPendingCandidate = async (row, index) => {
+    await handleGenerateShotVideo(row, index)
+  }
+
   const handleRegenerateSelectedVideo = async () => {
     if (selectedShotRows.length === 0 || singleVideoActionDisabled) return
     const queueableRows = []
     let missingVariants = 0
-    let missingKeyframes = 0
+    let missingInputs = 0
     for (const row of selectedShotRows) {
       const variant = getVariantForShot(row.scene.id, row.shot.id)
       if (!variant) {
         missingVariants += 1
         continue
       }
-      if (!yoloStoryboardAssetMap?.has(variant.key)) {
-        missingKeyframes += 1
+      if (!shotHasVideoInput(row, variant)) {
+        missingInputs += 1
         continue
       }
       queueableRows.push(row)
@@ -1651,11 +1859,11 @@ export default function MusicVideoEasyMode({
         setVideoStatus(`No video variant found for Shot ${selectedShotRows[0].index + 1}. Parse the script again first.`)
         return
       }
-      if (selectedShotRows.length === 1 && missingKeyframes > 0) {
-        setVideoStatus(`Shot ${selectedShotRows[0].index + 1} needs a keyframe before video can run.`)
+      if (selectedShotRows.length === 1 && missingInputs > 0) {
+        setVideoStatus(getMissingVideoInputMessage(selectedShotRows[0], selectedShotRows[0].index))
         return
       }
-      setVideoStatus('Selected shots need keyframes before video can run.')
+      setVideoStatus('Selected shots are missing keyframe images or ingredients sheets before video can run.')
       return
     }
     setSelectedShotIndex(queueableRows[0].index)
@@ -1673,9 +1881,9 @@ export default function MusicVideoEasyMode({
             resolutionOverride: outputResolution,
           }
         )
-        const skipped = missingVariants + missingKeyframes
+        const skipped = missingVariants + missingInputs
         setVideoStatus(queued > 0
-          ? `Queued ${plural(queued, `${selectedVideoWorkflowLabel} video rerun job`)}${skipped > 0 ? `; skipped ${plural(skipped, 'selected shot')} without a variant or keyframe.` : '.'}`
+          ? `Queued ${plural(queued, `${selectedVideoWorkflowLabel} video rerun job`)}${skipped > 0 ? `; skipped ${plural(skipped, 'selected shot')} without a variant, keyframe, or ingredients sheet.` : '.'}`
           : `No selected ${selectedVideoWorkflowLabel} video jobs were queued. Check whether those shots are already running.`)
       } else {
         const row = queueableRows[0]
@@ -2940,7 +3148,7 @@ export default function MusicVideoEasyMode({
       <div className="grid gap-3 md:grid-cols-3">
         <Stat label="Script shots" value={plannedShotCount} />
         <Stat label="Queue variants" value={queueVariantCount} />
-        <Stat label="Ready keyframes" value={yoloStoryboardReadyCount} />
+        <Stat label="Ready inputs" value={videoInputReadyCount} />
       </div>
       <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/70 p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -3132,11 +3340,18 @@ export default function MusicVideoEasyMode({
             {flatShots.map(({ scene, shot }, index) => {
               const variant = getVariantForShot(scene.id, shot.id)
               const asset = variant ? yoloStoryboardAssetMap?.get(variant.key) : null
-              const url = getAssetUrl(asset)
-              const cardState = getKeyframeCardState(variant, asset)
+              const inputMode = getShotInputMode(shot)
+              const ingredientsAsset = getIngredientsSheetAssetForShot(shot)
+              const displayAsset = inputMode === 'ingredients_sheet' ? ingredientsAsset : asset
+              const url = getAssetUrl(displayAsset)
+              const cardState = inputMode === 'ingredients_sheet'
+                ? (ingredientsAsset
+                  ? { state: 'ready', label: 'Ingredients ready', job: null }
+                  : { state: 'missing', label: 'Needs ingredients', job: null })
+                : getKeyframeCardState(variant, asset)
               const coverageLabel = getCoverageLabel(scene, shot)
               const keyframePrompt = String(shot.imageBeat || shot.beat || shot.referenceImagePrompt || '').trim()
-              const keyframeResolutionParts = buildActualImageResolutionParts(asset, runtimeImageDimensions, outputResolutionLabel)
+              const keyframeResolutionParts = buildActualImageResolutionParts(displayAsset, runtimeImageDimensions, outputResolutionLabel)
               return (
                 <div
                   key={`music-keyframe-${scene.id}-${shot.id}`}
@@ -3163,7 +3378,7 @@ export default function MusicVideoEasyMode({
                         src={url}
                         alt=""
                         className="h-full w-full object-cover"
-                        onLoad={(event) => rememberImageDimensions(asset, event.currentTarget)}
+                        onLoad={(event) => rememberImageDimensions(displayAsset, event.currentTarget)}
                       />
                     ) : (
                       <>
@@ -3183,9 +3398,9 @@ export default function MusicVideoEasyMode({
                         kind: 'image',
                         url,
                         title: `Shot ${index + 1}: ${shot.scriptShotLabel || scene.label || shot.id}`,
-                        subtitle: [coverageLabel, selectedKeyframeWorkflowLabel, ...keyframeResolutionParts, `${videoFps} fps`].filter(Boolean).join(' / '),
+                        subtitle: [coverageLabel, inputMode === 'ingredients_sheet' ? 'Ingredients Sheet' : selectedKeyframeWorkflowLabel, ...keyframeResolutionParts, `${videoFps} fps`].filter(Boolean).join(' / '),
                         prompt: keyframePrompt,
-                        editablePrompt: true,
+                        editablePrompt: inputMode !== 'ingredients_sheet',
                         sceneId: scene.id,
                         shotId: shot.id,
                         shotIndex: index,
@@ -3196,10 +3411,19 @@ export default function MusicVideoEasyMode({
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 text-xs font-semibold text-sf-text-primary">Shot {index + 1}: {shot.scriptShotLabel || scene.label || shot.id}</div>
                       <div className="flex shrink-0 items-center gap-1">
-                        {renderKeyframeRunButton({ scene, shot }, index)}
-                        {renderReplaceKeyframeButton({ scene, shot }, index)}
+                        {inputMode === 'ingredients_sheet' ? (
+                          renderAttachIngredientsButton({ scene, shot }, index)
+                        ) : (
+                          <>
+                            {renderKeyframeRunButton({ scene, shot }, index)}
+                            {renderReplaceKeyframeButton({ scene, shot }, index)}
+                          </>
+                        )}
                         {renderCopyPromptButton(keyframePrompt, `Shot ${index + 1} keyframe prompt copied.`, setKeyframeStatus)}
                       </div>
+                    </div>
+                    <div className="mt-2">
+                      {renderShotInputModeControl({ scene, shot }, true)}
                     </div>
                     {coverageLabel && (
                       <div className="mt-1 inline-flex rounded-full border border-sf-dark-600 px-2 py-0.5 text-[10px] text-sf-text-muted">
@@ -3231,15 +3455,23 @@ export default function MusicVideoEasyMode({
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  {!hasMultipleSelectedShots && renderReplaceKeyframeButton(selectedShotRow, selectedShotIndex, 'Replace Keyframe')}
-                  <button
-                    type="button"
-                    onClick={handleRegenerateSelectedKeyframe}
-                    disabled={singleKeyframeActionDisabled}
-                    className="rounded-lg bg-sf-accent px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-sf-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {hasMultipleSelectedShots ? `Regenerate ${selectedShotCount} Selected` : 'Regenerate Selected Shot'}
-                  </button>
+                  {!hasMultipleSelectedShots && getShotInputMode(selectedShotRow.shot) === 'ingredients_sheet'
+                    ? renderAttachIngredientsButton(selectedShotRow, selectedShotIndex, 'Attach Ingredients Sheet')
+                    : null}
+                  {!hasMultipleSelectedShots && getShotInputMode(selectedShotRow.shot) !== 'ingredients_sheet'
+                    ? renderReplaceKeyframeButton(selectedShotRow, selectedShotIndex, 'Replace Keyframe')
+                    : null}
+                  {(!selectedIncludesIngredientsMode || hasMultipleSelectedShots) && (
+                    <button
+                      type="button"
+                      onClick={handleRegenerateSelectedKeyframe}
+                      disabled={singleKeyframeActionDisabled || selectedIncludesIngredientsMode}
+                      className="rounded-lg bg-sf-accent px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-sf-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                      title={selectedIncludesIngredientsMode ? 'Switch ingredients shots back to Keyframe Image before regenerating keyframes.' : ''}
+                    >
+                      {hasMultipleSelectedShots ? `Regenerate ${selectedShotCount} Selected` : 'Regenerate Selected Shot'}
+                    </button>
+                  )}
                 </div>
               </div>
               {hasMultipleSelectedShots ? (
@@ -3248,6 +3480,16 @@ export default function MusicVideoEasyMode({
                 </div>
               ) : (
                 <div className="mt-3 text-xs text-sf-text-secondary">
+                  <div className="mb-3">
+                    {renderShotInputModeControl(selectedShotRow)}
+                  </div>
+                  {getShotInputMode(selectedShotRow.shot) === 'ingredients_sheet' && (
+                    <div className="mb-3 rounded-lg border border-sf-dark-700 bg-sf-dark-900 px-3 py-2 text-xs leading-5 text-sf-text-secondary">
+                      Ingredients sheet: <span className="text-sf-text-primary">
+                        {getIngredientsSheetAssetForShot(selectedShotRow.shot)?.name || 'None attached'}
+                      </span>
+                    </div>
+                  )}
                   <span className="text-[10px] uppercase tracking-wider text-sf-text-muted">Keyframe prompt</span>
                   <textarea
                     value={selectedShotRow.shot.imageBeat || selectedShotRow.shot.beat || ''}
@@ -3274,7 +3516,7 @@ export default function MusicVideoEasyMode({
             Video jobs from your director script
           </div>
           <p className="mt-1 text-xs leading-5 text-sf-text-secondary">
-            The script decides each shot's motion, while the selected video model renders from its matching keyframe.
+            The script decides each shot's motion, while the selected video model renders from each shot's keyframe or ingredients sheet.
           </p>
         </div>
         <div className="flex flex-col gap-2 md:items-end">
@@ -3487,9 +3729,9 @@ export default function MusicVideoEasyMode({
             {selectedVideoWorkflowLabel} uses the generated keyframes and motion prompts, but it will not use the song audio for lip-sync. Keep the LTX 2.3 Music pass for vocal-sync coverage.
           </div>
         )}
-        {yoloStoryboardReadyCount === 0 && (
+        {videoInputReadyCount === 0 && (
           <div className="mt-3 rounded-lg border border-sf-dark-700 bg-sf-dark-950/60 p-3 text-xs text-sf-text-muted">
-            Create keyframes first so each video job has a starting image.
+            Attach a keyframe image or ingredients sheet before queueing videos.
           </div>
         )}
         {customVideoWorkflowSelected && !customVideoReady && (
@@ -3512,15 +3754,99 @@ export default function MusicVideoEasyMode({
     </div>
   )
 
+  const renderPendingCandidates = (row, index, candidates = []) => {
+    if (!Array.isArray(candidates) || candidates.length === 0) return null
+    return (
+      <div className="mt-2 space-y-1.5 rounded-md border border-amber-400/30 bg-amber-400/10 p-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-200">
+            Pending review
+          </span>
+          <span className="text-[10px] text-amber-100/70">{candidates.length}</span>
+        </div>
+        {candidates.map((candidate, candidateIndex) => {
+          const busy = pendingCandidateBusyId === candidate.id
+          const label = `Candidate ${candidateIndex + 1}`
+          const created = candidate?.createdAt
+            ? new Date(candidate.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : ''
+          return (
+            <div
+              key={candidate.id}
+              className="rounded border border-amber-300/20 bg-sf-dark-950/60 p-1.5"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-2 text-[10px] text-sf-text-secondary">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!candidate.url) return
+                    setSelectedShotIndex(index)
+                    setMediaPreview({
+                      kind: 'video',
+                      url: candidate.url,
+                      title: `Shot ${index + 1}: ${label}`,
+                      subtitle: [selectedVideoWorkflowLabel, created].filter(Boolean).join(' / '),
+                      prompt: candidate.prompt || row?.shot?.videoBeat || row?.shot?.beat || '',
+                      editablePrompt: false,
+                      sceneId: row.scene.id,
+                      shotId: row.shot.id,
+                      shotIndex: index,
+                    })
+                  }}
+                  disabled={!candidate.url}
+                  className="min-w-0 truncate text-left font-semibold text-amber-100 hover:text-white disabled:cursor-not-allowed disabled:text-sf-text-muted"
+                  title={candidate.url ? 'Preview candidate' : 'Preview unavailable'}
+                >
+                  {label}{created ? ` · ${created}` : ''}
+                </button>
+                {busy && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-amber-200" />}
+              </div>
+              <div className="mt-1 flex flex-wrap gap-1">
+                <button
+                  type="button"
+                  onClick={() => { void handleConfirmPendingCandidate(row, index, candidate) }}
+                  disabled={busy || !handleConfirmYoloMusicVideoCandidate}
+                  className="inline-flex items-center gap-1 rounded border border-emerald-400/40 bg-emerald-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-200 transition-colors hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <CheckCircle2 className="h-3 w-3" />
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { void handleRerollPendingCandidate(row, index) }}
+                  disabled={busy || singleVideoActionDisabled}
+                  className="inline-flex items-center gap-1 rounded border border-sf-accent/40 bg-sf-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-sf-accent transition-colors hover:bg-sf-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  Re-roll
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDiscardPendingCandidate(row, index, candidate)}
+                  disabled={busy || !handleDiscardYoloMusicVideoCandidate}
+                  className="inline-flex items-center gap-1 rounded border border-sf-dark-600 bg-sf-dark-900/80 px-1.5 py-0.5 text-[10px] font-semibold text-sf-text-secondary transition-colors hover:border-red-400/50 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <X className="h-3 w-3" />
+                  Discard
+                </button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
   const renderVideosStep = () => (
     <div className="space-y-4">
       {renderStepHeader(
         'Generate videos from the script.',
-        'Each parsed shot can be generated or rerun on its own using the matching keyframe and song timing.'
+        'Each parsed shot can be generated or rerun on its own using its selected input and song timing.'
       )}
       <div className="grid gap-3 md:grid-cols-3">
         <Stat label="Script shots" value={plannedShotCount} />
-        <Stat label="Ready keyframes" value={yoloStoryboardReadyCount} />
+        <Stat label="Ready inputs" value={videoInputReadyCount} />
         <Stat label="Ready videos" value={videoReadyCount} />
       </div>
       {renderAdvancedVideoSettings()}
@@ -3545,11 +3871,15 @@ export default function MusicVideoEasyMode({
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
             {flatShots.map(({ scene, shot }, index) => {
               const variant = getVariantForShot(scene.id, shot.id)
-              const keyframeAsset = variant ? yoloStoryboardAssetMap?.get(variant.key) : null
+              const inputMode = getShotInputMode(shot)
+              const keyframeAsset = inputMode === 'ingredients_sheet'
+                ? getIngredientsSheetAssetForShot(shot)
+                : (variant ? yoloStoryboardAssetMap?.get(variant.key) : null)
               const videoAsset = getVideoAssetForVariant(variant)
               const keyframeUrl = getAssetUrl(keyframeAsset)
               const videoUrl = getAssetUrl(videoAsset)
-              const cardState = getVideoCardState(variant, videoAsset)
+              const pendingCandidates = getShotPendingCandidates(shot)
+              const cardState = getVideoCardState(variant, videoAsset, pendingCandidates)
               const shotTypeId = getShotTypeId(shot)
               const shotTypeOption = getMusicVideoShotTypeOption(shotTypeId)
               const start = Number(shot?.audioStart ?? 0) || 0
@@ -3575,7 +3905,9 @@ export default function MusicVideoEasyMode({
                       ? 'bg-gradient-to-br from-sf-accent/20 via-sf-dark-800 to-blue-500/20'
                       : cardState.state === 'error'
                         ? 'bg-red-950/30'
-                        : 'bg-sf-dark-800'
+                        : cardState.state === 'pending_review'
+                          ? 'bg-amber-950/30'
+                          : 'bg-sf-dark-800'
                   }`}>
                     <ShotVideoPreview videoUrl={videoUrl} keyframeUrl={keyframeUrl} />
                     {cardState.state === 'generating' && (
@@ -3602,7 +3934,9 @@ export default function MusicVideoEasyMode({
                           ? 'bg-sf-accent/80 text-white'
                           : cardState.state === 'error'
                             ? 'bg-red-500/80 text-white'
-                            : 'bg-sf-dark-950/80 text-sf-text-secondary'
+                            : cardState.state === 'pending_review'
+                              ? 'bg-amber-500/80 text-white'
+                              : 'bg-sf-dark-950/80 text-sf-text-secondary'
                     }`}>
                       {cardState.label}
                     </div>
@@ -3628,6 +3962,7 @@ export default function MusicVideoEasyMode({
                         <div className="h-full rounded-full bg-sf-accent" style={{ width: `${Math.min(100, Math.max(0, cardState.job.progress || 0))}%` }} />
                       </div>
                     )}
+                    {renderPendingCandidates({ scene, shot }, index, pendingCandidates)}
                   </div>
                 </div>
               )
@@ -4076,6 +4411,86 @@ export default function MusicVideoEasyMode({
     )
   }
 
+  const renderAttachIngredientsModal = () => {
+    if (!attachIngredientsTarget) return null
+    const selectedAssetUrl = getAssetUrl(selectedIngredientsSheetAsset)
+
+    return (
+      <div
+        className="fixed inset-0 z-50 overflow-y-auto bg-black/80 px-4 py-6 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Attach ingredients sheet"
+        onClick={closeAttachIngredientsDialog}
+      >
+        <div className="flex min-h-full items-center justify-center">
+          <div
+            className="w-[94vw] max-w-2xl rounded-lg border border-sf-dark-600 bg-sf-dark-950 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-sf-dark-700 px-4 py-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-sf-text-primary">Attach ingredients sheet</div>
+                <div className="mt-1 truncate text-[10px] text-sf-text-muted">{attachIngredientsTarget.label}</div>
+              </div>
+              <button
+                type="button"
+                onClick={closeAttachIngredientsDialog}
+                className="rounded-md p-1.5 text-sf-text-muted transition-colors hover:bg-sf-dark-800 hover:text-sf-text-primary focus:outline-none focus:ring-2 focus:ring-sf-accent"
+                title="Close"
+                aria-label="Close attach ingredients sheet"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-4">
+              <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/70 p-3">
+                <div className="text-xs font-semibold text-sf-text-primary">Use an existing ingredients sheet</div>
+                <p className="mt-1 text-[11px] leading-5 text-sf-text-secondary">
+                  Import ingredients sheets from the Assets panel first, then attach one here as this shot's video input.
+                </p>
+                <div className="mt-3 grid gap-3 md:grid-cols-[1fr_160px] md:items-start">
+                  <div className="space-y-3">
+                    <select
+                      value={ingredientsSheetAssetId}
+                      onChange={(event) => setIngredientsSheetAssetId(event.target.value)}
+                      disabled={ingredientsSheetAssets.length === 0}
+                      className="w-full rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 text-xs text-sf-text-primary outline-none focus:border-sf-accent disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <option value="">{ingredientsSheetAssets.length === 0 ? 'No ingredients sheets found' : 'Choose ingredients sheet...'}</option>
+                      {ingredientsSheetAssets.map((asset) => (
+                        <option key={asset.id} value={asset.id}>
+                          {asset.name || asset.path || asset.id}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={handleUseSelectedIngredientsSheet}
+                      disabled={!ingredientsSheetAssetId}
+                      className="inline-flex items-center gap-2 rounded-lg border border-sf-dark-600 px-3 py-2 text-xs font-semibold text-sf-text-secondary transition-colors hover:border-sf-dark-500 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <ImageIcon className="h-3.5 w-3.5" />
+                      Use Selected Sheet
+                    </button>
+                  </div>
+                  <div className="flex h-28 items-center justify-center overflow-hidden rounded-lg border border-sf-dark-700 bg-sf-dark-950">
+                    {selectedAssetUrl ? (
+                      <img src={selectedAssetUrl} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <ImageIcon className="h-5 w-5 text-sf-text-muted" />
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const stepRenderer = {
     song: renderSongStep,
     people: renderPeopleStep,
@@ -4120,6 +4535,7 @@ export default function MusicVideoEasyMode({
       </div>
       {renderMediaPreviewModal()}
       {renderReplaceKeyframeModal()}
+      {renderAttachIngredientsModal()}
       {renderReplaceVideoModal()}
     </>
   )

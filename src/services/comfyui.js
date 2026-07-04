@@ -116,6 +116,38 @@ function setPowerLoraEnabledByName(loraInputs, matchers = [], enabled = false, s
   return matched
 }
 
+function forceMusicInputModeLoras(loraInputs, usesIngredientsInput) {
+  if (!loraInputs || typeof loraInputs !== 'object') return
+  const ingredientsMatchers = [/IC-LoRA-Ingredients/i, /Ingredients/i]
+  const msrMatchers = [/Multiple-Subject-Reference/i, /\bMSR\b/i]
+  const ingredientsLoraMatched = setPowerLoraEnabledByName(
+    loraInputs,
+    ingredientsMatchers,
+    usesIngredientsInput,
+    1
+  )
+  const msrLoraMatched = setPowerLoraEnabledByName(
+    loraInputs,
+    msrMatchers,
+    !usesIngredientsInput,
+    1
+  )
+  if (!ingredientsLoraMatched && loraInputs.lora_5 && typeof loraInputs.lora_5 === 'object') {
+    loraInputs.lora_5.on = usesIngredientsInput
+    loraInputs.lora_5.strength = 1
+  }
+  if (!msrLoraMatched && loraInputs.lora_6 && typeof loraInputs.lora_6 === 'object') {
+    loraInputs.lora_6.on = !usesIngredientsInput
+    loraInputs.lora_6.strength = 1
+  }
+  if (usesIngredientsInput && loraInputs.lora_6 && typeof loraInputs.lora_6 === 'object') {
+    loraInputs.lora_6.on = false
+  }
+  if (!usesIngredientsInput && loraInputs.lora_5 && typeof loraInputs.lora_5 === 'object') {
+    loraInputs.lora_5.on = false
+  }
+}
+
 function firstWritableInputKey(node, preferredKeys = []) {
   const inputs = node?.inputs || {}
   for (const key of preferredKeys) {
@@ -3172,26 +3204,7 @@ export function modifyMusicVideoShotWorkflow(workflow, options = {}) {
       loraInputs.lora_4.on = Boolean(shotTypeOption.cameraLoraOn)
       loraInputs.lora_4.strength = Number(shotTypeOption.cameraLoraStrength) || 0
     }
-    const ingredientsLoraMatched = setPowerLoraEnabledByName(
-      loraInputs,
-      [/IC-LoRA-Ingredients/i, /Ingredients/i],
-      usesIngredientsInput,
-      1
-    )
-    const msrLoraMatched = setPowerLoraEnabledByName(
-      loraInputs,
-      [/Multiple-Subject-Reference/i, /\bMSR\b/i],
-      !usesIngredientsInput,
-      1
-    )
-    if (!ingredientsLoraMatched && loraInputs.lora_5 && typeof loraInputs.lora_5 === 'object') {
-      loraInputs.lora_5.on = usesIngredientsInput
-      loraInputs.lora_5.strength = 1
-    }
-    if (!msrLoraMatched && loraInputs.lora_6 && typeof loraInputs.lora_6 === 'object') {
-      loraInputs.lora_6.on = !usesIngredientsInput
-      loraInputs.lora_6.strength = 1
-    }
+    forceMusicInputModeLoras(loraInputs, usesIngredientsInput)
   }
   // Seeds — Pass 1 (2179) and Pass 2 (2169)
   if (modified['2179']?.inputs && 'noise_seed' in modified['2179'].inputs) {

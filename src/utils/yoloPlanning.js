@@ -45,6 +45,7 @@ const STRUCTURED_FIELD_PATTERNS = Object.freeze([
   // so the music planner can choose keyframe-image vs ingredients-sheet shots
   // and keep explicit setting/prop lists with the shot object.
   { key: 'inputMode', pattern: /^(?:input[_\s-]*mode|input\s*source|source\s*mode)\s*:\s*(.*)$/i },
+  { key: 'preExistingKeyframeId', pattern: /^(?:pre[_\s-]*existing\s*keyframe(?:\s*id)?|keyframe\s*id)\s*:\s*(.*)$/i },
   { key: 'locations', pattern: /^(?:locations?|settings?|location\s*refs?)\s*:\s*(.*)$/i },
   { key: 'accessories', pattern: /^(?:accessories|props?|key\s*props?|wardrobe\s*props?)\s*:\s*(.*)$/i },
   // Music-video-only: explicit audio offset (Phase 8). Accepted forms include
@@ -386,6 +387,7 @@ export function parseStructuredDirectorScript(script = '', options = {}) {
       // Music-video dual-input pass-through. The music planner normalizes
       // these into shot.input_mode, shot.locations, and shot.accessories.
       inputModeRaw: sanitizeSnippet(currentShot.inputMode || '', 40),
+      preExistingKeyframeIdRaw: sanitizeSnippet(currentShot.preExistingKeyframeId || '', 80),
       locationsRaw: sanitizeSnippet(currentShot.locations || '', 260),
       accessoriesRaw: sanitizeSnippet(currentShot.accessories || '', 260),
       // Music-video-only pass-through (Phase 8). The music planner calls
@@ -534,6 +536,7 @@ export function parseStructuredDirectorScript(script = '', options = {}) {
         lyricMoment: '',
         artist: '',
         inputMode: '',
+        preExistingKeyframeId: '',
         locations: '',
         accessories: '',
         startAt: '',

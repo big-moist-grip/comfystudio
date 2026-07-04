@@ -42,9 +42,10 @@ const STEPS = [
   { id: 'song', label: 'Song', number: '1' },
   { id: 'people', label: 'People', number: '2' },
   { id: 'locations', label: 'Locations', number: '3' },
-  { id: 'script', label: 'Director Script', number: '4' },
-  { id: 'keyframes', label: 'Keyframes', number: '5' },
-  { id: 'videos', label: 'Videos', number: '6' },
+  { id: 'prekeyframes', label: 'Pre-keyframes', number: '4' },
+  { id: 'script', label: 'Director Script', number: '5' },
+  { id: 'keyframes', label: 'Keyframes', number: '6' },
+  { id: 'videos', label: 'Videos', number: '7' },
 ]
 
 const ASPECT_RATIO_OPTIONS = [
@@ -522,6 +523,8 @@ export default function MusicVideoEasyMode({
   setYoloMusicCast,
   yoloMusicLocations = [],
   setYoloMusicLocations,
+  yoloMusicKeyframes = [],
+  setYoloMusicKeyframes,
   handleYoloMusicCastAdd,
   handleYoloMusicCastRemove,
   handleYoloMusicCastAssetChange,
@@ -533,6 +536,8 @@ export default function MusicVideoEasyMode({
   yoloMusicCastImageImporting = false,
   handleImportYoloMusicLocationImage,
   yoloMusicLocationImageImporting = false,
+  handleImportYoloMusicKeyframeImage,
+  yoloMusicKeyframeImageImporting = false,
   queuePeopleWizardJob,
   canUsePeopleWizardGeneration = false,
   yoloMusicKeyframeWorkflowId = 'nano-banana-2',
@@ -602,6 +607,7 @@ export default function MusicVideoEasyMode({
   const [briefStatus, setBriefStatus] = useState('')
   const [peopleStatus, setPeopleStatus] = useState('')
   const [locationsStatus, setLocationsStatus] = useState('')
+  const [preKeyframesStatus, setPreKeyframesStatus] = useState('')
   const [parseStatus, setParseStatus] = useState('')
   const [keyframeStatus, setKeyframeStatus] = useState('')
   const [videoStatus, setVideoStatus] = useState('')
@@ -2015,7 +2021,7 @@ export default function MusicVideoEasyMode({
     setLocationsStatus('')
     const importedAsset = await handleImportYoloMusicLocationImage()
     if (importedAsset) {
-      setLocationsStatus(`Imported ${importedAsset.name || 'location keyframe'} and added it to Locations & Sets.`)
+      setLocationsStatus(`Imported ${importedAsset.name || 'location reference image'} and added it to Locations & Sets.`)
     }
   }
 
@@ -2028,6 +2034,44 @@ export default function MusicVideoEasyMode({
   const handleLocationRemove = (locationId) => {
     setYoloMusicLocations?.((prev) => (Array.isArray(prev) ? prev : []).filter((entry) => entry?.id !== locationId))
     setLocationsStatus('Location removed.')
+  }
+
+  const handleImportPreExistingKeyframe = async () => {
+    if (!handleImportYoloMusicKeyframeImage || yoloMusicKeyframeImageImporting) return
+    setPreKeyframesStatus('')
+    const importedAsset = await handleImportYoloMusicKeyframeImage()
+    if (importedAsset) {
+      setPreKeyframesStatus(`Imported ${importedAsset.name || 'pre-existing keyframe'}. Link it to a location or add a custom description before copying the LLM brief.`)
+    }
+  }
+
+  const handleAddPreExistingKeyframe = () => {
+    setYoloMusicKeyframes?.((prev) => {
+      const list = Array.isArray(prev) ? [...prev] : []
+      list.push({
+        id: `keyframe-${Date.now()}-${list.length}`,
+        imageAssetId: null,
+        locationId: null,
+        locationDescription: '',
+      })
+      return list
+    })
+    setPreKeyframesStatus('Added a blank keyframe. Select an image and link a location or custom description.')
+  }
+
+  const handlePreExistingKeyframeFieldChange = (keyframeId, field, value) => {
+    setYoloMusicKeyframes?.((prev) => (Array.isArray(prev) ? prev : []).map((entry) => {
+      if (entry?.id !== keyframeId) return entry
+      const next = { ...entry, [field]: value }
+      if (field === 'locationId' && value) next.locationDescription = ''
+      if (field === 'locationDescription' && String(value || '').trim()) next.locationId = null
+      return next
+    }))
+  }
+
+  const handlePreExistingKeyframeRemove = (keyframeId) => {
+    setYoloMusicKeyframes?.((prev) => (Array.isArray(prev) ? prev : []).filter((entry) => entry?.id !== keyframeId))
+    setPreKeyframesStatus('Pre-existing keyframe removed.')
   }
 
   const handlePeopleWizardFieldChange = (field, value) => {
@@ -3084,7 +3128,7 @@ export default function MusicVideoEasyMode({
     <div className="space-y-4">
       {renderStepHeader(
         'Define locations and sets.',
-        'Add the places the Director Script can use, with optional keyframe images so the LLM knows the visual anchors before it plots shots.'
+        'Add places the Director Script can use. Images here are reference/inspiration only for planning; they are not used as shot keyframes.'
       )}
 
       <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/70 p-4">
@@ -3101,10 +3145,10 @@ export default function MusicVideoEasyMode({
               onClick={handleImportLocationKeyframe}
               disabled={!handleImportYoloMusicLocationImage || yoloMusicLocationImageImporting}
               className="inline-flex items-center justify-center gap-2 rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 text-xs font-semibold text-sf-text-secondary transition-colors hover:border-sf-dark-500 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-              title="Import a still image that represents a location or set."
+              title="Import a reference image for the Director Script only. This will not be used as a video keyframe."
             >
               {yoloMusicLocationImageImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-              {yoloMusicLocationImageImporting ? 'Importing' : 'Upload Keyframe'}
+              {yoloMusicLocationImageImporting ? 'Importing' : 'Upload Reference'}
             </button>
             <button
               type="button"
@@ -3123,6 +3167,9 @@ export default function MusicVideoEasyMode({
               {locationsStatus}
             </div>
           )}
+          <div className="rounded-lg border border-cyan-400/25 bg-cyan-400/10 px-3 py-2 text-xs leading-5 text-cyan-100">
+            Location images are Director Script references only. Use the Pre-existing Keyframes step for actual first-frame images assigned to shots.
+          </div>
           {(yoloMusicLocations || []).length === 0 && (
             <div className="rounded-lg border border-dashed border-sf-dark-600 px-3 py-6 text-center text-xs text-sf-text-muted">
               Add locations before copying the LLM brief if you want the script to reuse named sets.
@@ -3134,7 +3181,7 @@ export default function MusicVideoEasyMode({
             return (
               <div key={entry.id || index} className="grid gap-3 rounded-lg border border-sf-dark-700 bg-sf-dark-950/50 p-3 lg:grid-cols-[8rem_minmax(0,1fr)_minmax(0,1.4fr)_auto]">
                 <div>
-                  <FieldLabel>Reference</FieldLabel>
+                  <FieldLabel>Script Reference Image</FieldLabel>
                   <div className="mt-1 aspect-video overflow-hidden rounded-lg border border-sf-dark-600 bg-sf-dark-900">
                     {locationUrl ? (
                       <img src={locationUrl} alt="" className="h-full w-full object-cover" loading="lazy" decoding="async" />
@@ -3182,6 +3229,143 @@ export default function MusicVideoEasyMode({
                   <button
                     type="button"
                     onClick={() => handleLocationRemove(entry.id)}
+                    className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-muted transition-colors hover:border-red-400/60 hover:text-red-200"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+
+  const renderPreExistingKeyframesStep = () => (
+    <div className="space-y-4">
+      {renderStepHeader(
+        'Add pre-existing keyframes.',
+        'Use externally generated first-frame images for specific planned shots. Each one needs a location link or custom location description before the LLM brief can use it.'
+      )}
+
+      <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/70 p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <FieldLabel>Pre-existing Keyframes</FieldLabel>
+            <div className="mt-1 text-sm font-semibold text-sf-text-primary">
+              {plural((yoloMusicKeyframes || []).length, 'keyframe')}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleImportPreExistingKeyframe}
+              disabled={!handleImportYoloMusicKeyframeImage || yoloMusicKeyframeImageImporting}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 text-xs font-semibold text-sf-text-secondary transition-colors hover:border-sf-dark-500 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              title="Import an externally generated first-frame image for a future shot."
+            >
+              {yoloMusicKeyframeImageImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              {yoloMusicKeyframeImageImporting ? 'Importing' : 'Upload Keyframe'}
+            </button>
+            <button
+              type="button"
+              onClick={handleAddPreExistingKeyframe}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-sf-accent px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-sf-accent/90"
+            >
+              <ImageIcon className="h-4 w-4" />
+              Add Keyframe
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-3">
+          <div className="rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-xs leading-5 text-amber-100">
+            Keyframes are actual first-frame images for shots. Each keyframe must have an image and either a linked Location or a Custom Description.
+          </div>
+          {preKeyframesStatus && (
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+              {preKeyframesStatus}
+            </div>
+          )}
+          {(yoloMusicKeyframes || []).length === 0 && (
+            <div className="rounded-lg border border-dashed border-sf-dark-600 px-3 py-6 text-center text-xs text-sf-text-muted">
+              Upload externally generated keyframe images here if the LLM should plan around exact first frames.
+            </div>
+          )}
+          {(yoloMusicKeyframes || []).map((entry, index) => {
+            const keyframeAsset = imageAssets.find((asset) => asset?.id === entry?.imageAssetId) || null
+            const keyframeUrl = getAssetUrl(keyframeAsset)
+            const linkedLocation = (yoloMusicLocations || []).find((location) => location?.id === entry?.locationId) || null
+            const hasLocationContext = Boolean(entry?.locationId || String(entry?.locationDescription || '').trim())
+            const isReady = Boolean(entry?.imageAssetId && hasLocationContext)
+            return (
+              <div key={entry.id || index} className={`grid gap-3 rounded-lg border p-3 lg:grid-cols-[8rem_minmax(0,1fr)_minmax(0,1fr)_auto] ${
+                isReady ? 'border-sf-dark-700 bg-sf-dark-950/50' : 'border-amber-400/40 bg-amber-400/5'
+              }`}>
+                <div>
+                  <FieldLabel>First Frame</FieldLabel>
+                  <div className="mt-1 aspect-video overflow-hidden rounded-lg border border-sf-dark-600 bg-sf-dark-900">
+                    {keyframeUrl ? (
+                      <img src={keyframeUrl} alt="" className="h-full w-full object-cover" loading="lazy" decoding="async" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-[10px] text-sf-text-muted">
+                        No image
+                      </div>
+                    )}
+                  </div>
+                  <select
+                    value={entry?.imageAssetId || ''}
+                    onChange={(event) => handlePreExistingKeyframeFieldChange(entry.id, 'imageAssetId', event.target.value || null)}
+                    className="mt-2 w-full rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-2 py-1.5 text-[10px] text-sf-text-primary outline-none focus:border-sf-accent"
+                  >
+                    <option value="">No image</option>
+                    {imageAssets.map((asset) => (
+                      <option key={asset.id} value={asset.id}>{asset.name || asset.id}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <FieldLabel>Linked Location</FieldLabel>
+                  <select
+                    value={entry?.locationId || ''}
+                    onChange={(event) => handlePreExistingKeyframeFieldChange(entry.id, 'locationId', event.target.value || null)}
+                    className="mt-1 w-full rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 text-xs text-sf-text-primary outline-none focus:border-sf-accent"
+                  >
+                    <option value="">Use custom description</option>
+                    {(yoloMusicLocations || []).map((location) => (
+                      <option key={location.id} value={location.id}>{location.name || location.id}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-[10px] leading-4 text-sf-text-muted">
+                    {linkedLocation ? `Linked to ${linkedLocation.name || linkedLocation.id}.` : 'Choose a defined location or type a custom description.'}
+                  </p>
+                </div>
+                <div>
+                  <FieldLabel>Custom Description</FieldLabel>
+                  <input
+                    type="text"
+                    value={entry?.locationDescription || ''}
+                    onChange={(event) => handlePreExistingKeyframeFieldChange(entry.id, 'locationDescription', event.target.value)}
+                    disabled={Boolean(entry?.locationId)}
+                    placeholder="Night highway shoulder with red taillight streaks"
+                    className="mt-1 w-full rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 text-xs text-sf-text-primary outline-none focus:border-sf-accent disabled:cursor-not-allowed disabled:opacity-50"
+                  />
+                  {!isReady && (
+                    <p className="mt-1 text-[10px] leading-4 text-amber-200">
+                      Missing {entry?.imageAssetId ? 'location link or custom description' : 'image'}.
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-col items-start justify-end gap-2">
+                  <span className={`rounded-full border px-2 py-1 text-[10px] ${
+                    isReady ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' : 'border-amber-400/40 bg-amber-400/10 text-amber-200'
+                  }`}>
+                    {isReady ? 'Ready for brief' : 'Incomplete'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handlePreExistingKeyframeRemove(entry.id)}
                     className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-muted transition-colors hover:border-red-400/60 hover:text-red-200"
                   >
                     Remove
@@ -4716,6 +4900,7 @@ export default function MusicVideoEasyMode({
     song: renderSongStep,
     people: renderPeopleStep,
     locations: renderLocationsStep,
+    prekeyframes: renderPreExistingKeyframesStep,
     script: renderScriptStep,
     keyframes: renderKeyframesStep,
     videos: renderVideosStep,
@@ -4725,7 +4910,7 @@ export default function MusicVideoEasyMode({
     <>
       <div className="space-y-4">
         <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/40 p-2">
-          <div className="grid gap-2 md:grid-cols-6">
+          <div className="grid gap-2 md:grid-cols-7">
             {STEPS.map((entry) => {
               const selected = step === entry.id
               const disabled = isStepDisabled(entry.id)

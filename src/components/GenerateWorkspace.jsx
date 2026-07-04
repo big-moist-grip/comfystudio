@@ -1227,6 +1227,16 @@ function normalizeMusicLocationEntry(entry, index = 0) {
   }
 }
 
+function normalizeMusicKeyframeEntry(entry, index = 0) {
+  const id = String(entry?.id || `keyframe-${index + 1}`).trim()
+  return {
+    id,
+    imageAssetId: entry?.imageAssetId ?? entry?.assetId ?? null,
+    locationId: entry?.locationId ?? null,
+    locationDescription: String(entry?.locationDescription || '').trim(),
+  }
+}
+
 function normalizeShotForScene(sceneId, shot, shotIndex, fallback = {}, options = {}) {
   const minDurationSeconds = Math.max(0.1, Number(options.minDurationSeconds) || 2)
   const maxDurationSeconds = Math.max(minDurationSeconds, Number(options.maxDurationSeconds) || 5)
@@ -1683,6 +1693,7 @@ function buildMusicVideoPlanFromScript(options = {}) {
       const inputMode = normalizeShotInputMode(scriptShot.inputModeRaw || scriptShot.input_mode)
       const locations = normalizeShotStringList(scriptShot.locations || scriptShot.locationsRaw)
       const accessories = normalizeShotStringList(scriptShot.accessories || scriptShot.accessoriesRaw)
+      const preExistingKeyframeId = String(scriptShot.preExistingKeyframeIdRaw || scriptShot.preExistingKeyframeId || '').trim()
       const explicitShotPrompt = String(scriptShot.shotPromptRaw || '').trim()
 
       const composedVideoPrompt = composeMusicShotVideoPrompt({
@@ -1731,6 +1742,7 @@ function buildMusicVideoPlanFromScript(options = {}) {
           angles: ['Medium shot'],
           cameraPresetId: 'auto',
           input_mode: inputMode,
+          preExistingKeyframeId,
           ingredientsSheetAssetId: '',
           locations,
           accessories,
@@ -1763,6 +1775,7 @@ function buildMusicVideoPlanFromScript(options = {}) {
           scriptLyricLineIndex: lineIdx,
           scriptArtistRaw: artistOverrideRaw,
           scriptInputModeRaw: scriptShot.inputModeRaw || '',
+          scriptPreExistingKeyframeIdRaw: scriptShot.preExistingKeyframeIdRaw || '',
           scriptLocationsRaw: scriptShot.locationsRaw || '',
           scriptAccessoriesRaw: scriptShot.accessoriesRaw || '',
           scriptShotPromptRaw: scriptShot.shotPromptRaw || '',
@@ -2191,6 +2204,7 @@ function buildMusicVideoLLMPrompt(options = {}) {
     lyrics = '',
     cast = [],
     locations = [],
+    keyframes = [],
     pass = 'master',
     variantDescriptor = '',
     masterScript = '',
@@ -2266,6 +2280,29 @@ function buildMusicVideoLLMPrompt(options = {}) {
     sections.push('AVAILABLE LOCATIONS: (none defined yet — use concise location names in each shot, but prefer project-defined names once available).')
   }
 
+  const locationNameById = new Map((Array.isArray(locations) ? locations : [])
+    .map((location) => [String(location?.id || ''), String(location?.name || '').trim()])
+    .filter(([id, name]) => id && name))
+  const validKeyframes = (Array.isArray(keyframes) ? keyframes : []).filter((entry) => (
+    entry?.imageAssetId && (entry?.locationId || String(entry?.locationDescription || '').trim())
+  ))
+  if (validKeyframes.length > 0) {
+    const keyframeBlock = ['AVAILABLE PRE-EXISTING KEYFRAMES:']
+    for (const entry of validKeyframes) {
+      const keyframeId = String(entry?.id || '').trim()
+      if (!keyframeId) continue
+      const locationName = entry?.locationId ? locationNameById.get(String(entry.locationId)) || String(entry.locationId) : ''
+      const locationText = locationName || String(entry?.locationDescription || '').trim()
+      keyframeBlock.push(`Keyframe ID: ${keyframeId}, Image: Attached, Location/Description: ${locationText}`)
+    }
+    if (keyframeBlock.length > 1) {
+      keyframeBlock.push('If you assign a shot to use a Pre-existing Keyframe, you must set Input mode: keyframe_image and write a line exactly like "Keyframe ID: <id>" in that shot block. You can only use each Pre-existing Keyframe once.')
+      sections.push(keyframeBlock.join('\n'))
+    }
+  } else {
+    sections.push('AVAILABLE PRE-EXISTING KEYFRAMES: (none ready — use generated/planned keyframes unless keyframes are added here).')
+  }
+
   if (concept.trim()) {
     sections.push(`Concept / story:\n${concept.trim()}`)
   }
@@ -2303,6 +2340,7 @@ function buildMusicVideoLLMPrompt(options = {}) {
     '  {',
     '    "input_mode": "keyframe_image" | "ingredients_sheet",',
     '    "shotPrompt": "single string; ingredients_sheet shots must contain the exact two labeled parts separated by a newline",',
+    '    "preExistingKeyframeId": "optional Keyframe ID from AVAILABLE PRE-EXISTING KEYFRAMES; only when input_mode is keyframe_image",',
     '    "locations": ["location or setting name"],',
     '    "accessories": ["prop, wardrobe item, instrument, vehicle, or motif"]',
     '  }',
@@ -2334,6 +2372,7 @@ function buildMusicVideoLLMPrompt(options = {}) {
     '  7. Every shot MUST include "Input mode:" with exactly one of these values: "keyframe_image" or "ingredients_sheet". Use "ingredients_sheet" for shots needing strict character, location, wardrobe, prop, or multi-subject consistency; use "keyframe_image" for abstract, dynamic, atmospheric, or one-off imagery.',
     '  8. Every shot MUST include "Locations:" as a comma-separated list of relevant setting/location names, or "none".',
     '  8a. If AVAILABLE LOCATIONS are provided, every shot MUST assign one of those Location Names in "Locations:" unless the shot is explicitly placeless/abstract.',
+    '  8b. If using a Pre-existing Keyframe, write "Keyframe ID: <id>" in the shot block, keep Input mode as keyframe_image, and do not reuse that Keyframe ID on another shot.',
     '  9. Every shot MUST include "Accessories:" as a comma-separated list of important props, wardrobe pieces, instruments, vehicles, or visual motifs, or "none".',
     '  10. For ingredients_sheet shots, every Shot prompt MUST use the exact two-part format above and preserve the newline between the two labels.',
     '  11. "Keyframe prompt:" describes the opening still and must include location, subject, wardrobe/props, lighting, color palette, composition, and the subject\'s readable emotional state when a person appears.',
@@ -3414,6 +3453,7 @@ function collectGenerateWorkspaceAssetIds(state) {
   Object.values(state?.selectedAssetFieldIds || {}).forEach((assetId) => ids.push(assetId))
   ;(Array.isArray(state?.yoloMusicCast) ? state.yoloMusicCast : []).forEach((entry) => ids.push(entry?.assetId))
   ;(Array.isArray(state?.yoloMusicLocations) ? state.yoloMusicLocations : []).forEach((entry) => ids.push(entry?.assetId))
+  ;(Array.isArray(state?.yoloMusicKeyframes) ? state.yoloMusicKeyframes : []).forEach((entry) => ids.push(entry?.imageAssetId))
   return ids.map((id) => String(id || '').trim()).filter(Boolean)
 }
 
@@ -3725,6 +3765,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       .map((entry, idx) => normalizeMusicLocationEntry(entry, idx))
       .filter((entry) => entry.name || entry.description || entry.assetId)
   })
+  const [yoloMusicKeyframes, setYoloMusicKeyframes] = useState(() => {
+    const saved = Array.isArray(persistedState?.yoloMusicKeyframes) ? persistedState.yoloMusicKeyframes : []
+    return saved
+      .map((entry, idx) => normalizeMusicKeyframeEntry(entry, idx))
+      .filter((entry) => entry.imageAssetId || entry.locationId || entry.locationDescription)
+  })
   const [yoloMusicTargetDuration, setYoloMusicTargetDuration] = useState(persistedState?.yoloMusicTargetDuration || 30)
   const [yoloMusicQualityProfile, setYoloMusicQualityProfile] = useState(persistedState?.yoloMusicQualityProfile || 'balanced')
   const [yoloMusicKeyframeWorkflowId, setYoloMusicKeyframeWorkflowId] = useState(() => {
@@ -3794,6 +3840,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const [yoloMusicAudioImporting, setYoloMusicAudioImporting] = useState(false)
   const [yoloMusicCastImageImporting, setYoloMusicCastImageImporting] = useState(false)
   const [yoloMusicLocationImageImporting, setYoloMusicLocationImageImporting] = useState(false)
+  const [yoloMusicKeyframeImageImporting, setYoloMusicKeyframeImageImporting] = useState(false)
   const [yoloMusicTranscribingSrt, setYoloMusicTranscribingSrt] = useState(false)
   const [yoloMusicTranscriptionStatus, setYoloMusicTranscriptionStatus] = useState('')
   const [confirmDialog, setConfirmDialog] = useState(null) // { title, message, confirmLabel, cancelLabel, tone }
@@ -4012,6 +4059,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         yoloMusicArtistAssetId,
         yoloMusicCast,
         yoloMusicLocations,
+        yoloMusicKeyframes,
         yoloMusicTargetDuration,
         yoloMusicQualityProfile,
         yoloMusicKeyframeWorkflowId,
@@ -4105,6 +4153,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicArtistAssetId,
     yoloMusicCast,
     yoloMusicLocations,
+    yoloMusicKeyframes,
     yoloMusicTargetDuration,
     yoloMusicQualityProfile,
     yoloMusicKeyframeWorkflowId,
@@ -4917,8 +4966,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const handleImportYoloMusicLocationImage = useCallback(async () => {
     if (yoloMusicLocationImageImporting) return null
     if (!currentProjectHandle) {
-      setFormError('Open or create a project first so ComfyStudio can import the location keyframe.')
-      addComfyLog('error', 'Location keyframe import requires an open project folder.')
+      setFormError('Open or create a project first so ComfyStudio can import the location reference image.')
+      addComfyLog('error', 'Location reference image import requires an open project folder.')
       return null
     }
 
@@ -4926,7 +4975,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     try {
       if (isElectron() && window.electronAPI?.selectFile) {
         selectedFile = await window.electronAPI.selectFile({
-          title: 'Select location keyframe image',
+          title: 'Select location reference image',
           filters: [
             { name: 'Image Files', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff'] },
             { name: 'All Files', extensions: ['*'] },
@@ -4943,13 +4992,13 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       }
     } catch (error) {
       const message = error?.message || 'Unknown file picker error'
-      setFormError(`Could not open location keyframe picker: ${message}`)
-      addComfyLog('error', `Could not open location keyframe picker: ${message}`)
+      setFormError(`Could not open location reference image picker: ${message}`)
+      addComfyLog('error', `Could not open location reference image picker: ${message}`)
       return null
     }
     if (!selectedFile) return null
     if (typeof selectedFile !== 'string' && selectedFile.type && !String(selectedFile.type).startsWith('image/')) {
-      const message = 'Only image files can be used as location keyframes.'
+      const message = 'Only image files can be used as location reference images.'
       setFormError(message)
       addComfyLog('error', message)
       return null
@@ -4974,13 +5023,13 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           ...(assetInfo.settings || {}),
           width: assetInfo.width,
           height: assetInfo.height,
-          referenceRole: 'location_keyframe',
+          referenceRole: 'location_reference',
         },
       })
-      if (!newAsset) throw new Error('Could not register imported location keyframe.')
+      if (!newAsset) throw new Error('Could not register imported location reference image.')
 
-      const rawName = String(newAsset.name || assetInfo.name || 'Location keyframe')
-      const displayName = rawName.replace(/\.[a-z0-9]{1,8}$/i, '').replace(/[_-]+/g, ' ').trim() || 'Location keyframe'
+      const rawName = String(newAsset.name || assetInfo.name || 'Location reference')
+      const displayName = rawName.replace(/\.[a-z0-9]{1,8}$/i, '').replace(/[_-]+/g, ' ').trim() || 'Location reference'
       setYoloMusicLocations((prev) => {
         const list = Array.isArray(prev) ? [...prev] : []
         list.push({
@@ -4992,12 +5041,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         return list
       })
       await saveProject?.()
-      addComfyLog('status', `Imported location keyframe: ${newAsset.name || displayName}`)
+      addComfyLog('status', `Imported location reference image: ${newAsset.name || displayName}`)
       return newAsset
     } catch (error) {
       const message = error?.message || 'Unknown import error'
-      setFormError(`Could not import location keyframe: ${message}`)
-      addComfyLog('error', `Could not import location keyframe: ${message}`)
+      setFormError(`Could not import location reference image: ${message}`)
+      addComfyLog('error', `Could not import location reference image: ${message}`)
       return null
     } finally {
       setYoloMusicLocationImageImporting(false)
@@ -5008,6 +5057,99 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     currentProjectHandle,
     saveProject,
     yoloMusicLocationImageImporting,
+  ])
+  const handleImportYoloMusicKeyframeImage = useCallback(async () => {
+    if (yoloMusicKeyframeImageImporting) return null
+    if (!currentProjectHandle) {
+      setFormError('Open or create a project first so ComfyStudio can import the pre-existing keyframe.')
+      addComfyLog('error', 'Pre-existing keyframe import requires an open project folder.')
+      return null
+    }
+
+    let selectedFile = null
+    try {
+      if (isElectron() && window.electronAPI?.selectFile) {
+        selectedFile = await window.electronAPI.selectFile({
+          title: 'Select pre-existing keyframe image',
+          filters: [
+            { name: 'Image Files', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff'] },
+            { name: 'All Files', extensions: ['*'] },
+          ],
+        })
+      } else {
+        selectedFile = await new Promise((resolve) => {
+          const input = document.createElement('input')
+          input.type = 'file'
+          input.accept = 'image/*,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff'
+          input.onchange = () => resolve(input.files?.[0] || null)
+          input.click()
+        })
+      }
+    } catch (error) {
+      const message = error?.message || 'Unknown file picker error'
+      setFormError(`Could not open pre-existing keyframe picker: ${message}`)
+      addComfyLog('error', `Could not open pre-existing keyframe picker: ${message}`)
+      return null
+    }
+    if (!selectedFile) return null
+    if (typeof selectedFile !== 'string' && selectedFile.type && !String(selectedFile.type).startsWith('image/')) {
+      const message = 'Only image files can be used as pre-existing keyframes.'
+      setFormError(message)
+      addComfyLog('error', message)
+      return null
+    }
+
+    setFormError(null)
+    setYoloMusicKeyframeImageImporting(true)
+
+    try {
+      const assetInfo = await importAsset(currentProjectHandle, selectedFile, 'images')
+      const sessionUrl = typeof selectedFile !== 'string'
+        ? URL.createObjectURL(selectedFile)
+        : assetInfo.path
+          ? await getProjectFileUrl(currentProjectHandle, assetInfo.path)
+          : null
+      const newAsset = addAsset({
+        ...assetInfo,
+        type: 'image',
+        url: sessionUrl || assetInfo.url || '',
+        isImported: true,
+        settings: {
+          ...(assetInfo.settings || {}),
+          width: assetInfo.width,
+          height: assetInfo.height,
+          referenceRole: 'preexisting_keyframe',
+        },
+      })
+      if (!newAsset) throw new Error('Could not register imported pre-existing keyframe.')
+
+      setYoloMusicKeyframes((prev) => {
+        const list = Array.isArray(prev) ? [...prev] : []
+        list.push({
+          id: `keyframe-${Date.now()}-${list.length}`,
+          imageAssetId: newAsset.id,
+          locationId: null,
+          locationDescription: '',
+        })
+        return list
+      })
+      await saveProject?.()
+      addComfyLog('status', `Imported pre-existing keyframe: ${newAsset.name || 'keyframe image'}`)
+      return newAsset
+    } catch (error) {
+      const message = error?.message || 'Unknown import error'
+      setFormError(`Could not import pre-existing keyframe: ${message}`)
+      addComfyLog('error', `Could not import pre-existing keyframe: ${message}`)
+      return null
+    } finally {
+      setYoloMusicKeyframeImageImporting(false)
+    }
+  }, [
+    addAsset,
+    addComfyLog,
+    currentProjectHandle,
+    saveProject,
+    yoloMusicKeyframeImageImporting,
   ])
   const createYoloMusicCustomKeyframeStarter = useCallback(async () => {
     const starter = {
@@ -6375,6 +6517,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     locationSignature: yoloMusicLocations
       .map((location) => `${location?.name || ''}:${location?.assetId || ''}:${location?.description || ''}`)
       .join('|'),
+    keyframeSignature: yoloMusicKeyframes
+      .map((keyframe) => `${keyframe?.id || ''}:${keyframe?.imageAssetId || ''}:${keyframe?.locationId || ''}:${keyframe?.locationDescription || ''}`)
+      .join('|'),
     lyrics: yoloMusicPromptLyrics,
     script: String(script ?? yoloMusicScript),
     concept: String(concept ?? yoloMusicConcept),
@@ -6390,6 +6535,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicQualityProfile,
     yoloMusicResolvedCast,
     yoloMusicLocations,
+    yoloMusicKeyframes,
     yoloMusicScript,
     yoloMusicStyleNotes,
     yoloMusicTargetDuration,
@@ -9332,6 +9478,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       lyrics: yoloMusicPromptLyrics,
       cast: yoloMusicResolvedCast,
       locations: yoloMusicLocations,
+      keyframes: yoloMusicKeyframes,
       pass: passType,
       variantDescriptor,
       masterScript: yoloMusicScript,
@@ -9345,6 +9492,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicPromptLyrics,
     yoloMusicResolvedCast,
     yoloMusicLocations,
+    yoloMusicKeyframes,
     yoloMusicScript,
   ])
 
@@ -9358,6 +9506,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       lyrics: yoloMusicPromptLyrics,
       cast: yoloMusicResolvedCast,
       locations: yoloMusicLocations,
+      keyframes: yoloMusicKeyframes,
       coveragePlan: options.coveragePlan || null,
     })
     await copyTextToClipboard(llmPrompt)
@@ -9373,6 +9522,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicPromptLyrics,
     yoloMusicResolvedCast,
     yoloMusicLocations,
+    yoloMusicKeyframes,
   ])
 
   /**
@@ -14645,6 +14795,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     setYoloMusicCast={setYoloMusicCast}
                     yoloMusicLocations={yoloMusicLocations}
                     setYoloMusicLocations={setYoloMusicLocations}
+                    yoloMusicKeyframes={yoloMusicKeyframes}
+                    setYoloMusicKeyframes={setYoloMusicKeyframes}
                     yoloMusicKeyframeWorkflowId={yoloStoryboardWorkflowId}
                     setYoloMusicKeyframeWorkflowId={setYoloMusicKeyframeWorkflowId}
                     yoloMusicKeyframeWorkflowOptions={YOLO_MUSIC_KEYFRAME_WORKFLOW_OPTIONS}
@@ -14676,6 +14828,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     yoloMusicCastImageImporting={yoloMusicCastImageImporting}
                     handleImportYoloMusicLocationImage={handleImportYoloMusicLocationImage}
                     yoloMusicLocationImageImporting={yoloMusicLocationImageImporting}
+                    handleImportYoloMusicKeyframeImage={handleImportYoloMusicKeyframeImage}
+                    yoloMusicKeyframeImageImporting={yoloMusicKeyframeImageImporting}
                     queuePeopleWizardJob={queuePeopleWizardJob}
                     canUsePeopleWizardGeneration={Boolean(BUILTIN_WORKFLOW_PATHS['z-image-turbo'] && BUILTIN_WORKFLOW_PATHS['multi-angles'])}
                     generationQueue={generationQueue}
@@ -15173,6 +15327,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                         lyrics: yoloMusicPromptLyrics,
                                         cast: yoloMusicResolvedCast,
                                         locations: yoloMusicLocations,
+                                        keyframes: yoloMusicKeyframes,
                                       })
                                       void copyTextToClipboard(llmPrompt)
                                     }}

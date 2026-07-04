@@ -1670,8 +1670,9 @@ function buildMusicVideoPlanFromScript(options = {}) {
       const inputMode = normalizeShotInputMode(scriptShot.inputModeRaw || scriptShot.input_mode)
       const locations = normalizeShotStringList(scriptShot.locations || scriptShot.locationsRaw)
       const accessories = normalizeShotStringList(scriptShot.accessories || scriptShot.accessoriesRaw)
+      const explicitShotPrompt = String(scriptShot.shotPromptRaw || '').trim()
 
-      const videoPrompt = composeMusicShotVideoPrompt({
+      const composedVideoPrompt = composeMusicShotVideoPrompt({
         motionPromptRaw: scriptShot.motionPromptRaw || scriptShot.videoBeat,
         shotTypeOption,
         lyricMoment: effectiveLyricMomentHint,
@@ -1679,6 +1680,7 @@ function buildMusicVideoPlanFromScript(options = {}) {
         styleNotes,
         cameraDirection: scriptShot.cameraDirection,
       })
+      const videoPrompt = explicitShotPrompt || composedVideoPrompt
       const referencePrompt = composeMusicShotReferencePrompt({
         keyframePromptRaw: scriptShot.keyframePromptRaw || scriptShot.imageBeat,
         shotTypeOption,
@@ -1750,6 +1752,7 @@ function buildMusicVideoPlanFromScript(options = {}) {
           scriptInputModeRaw: scriptShot.inputModeRaw || '',
           scriptLocationsRaw: scriptShot.locationsRaw || '',
           scriptAccessoriesRaw: scriptShot.accessoriesRaw || '',
+          scriptShotPromptRaw: scriptShot.shotPromptRaw || '',
         }],
       })
 
@@ -2268,9 +2271,21 @@ function buildMusicVideoLLMPrompt(options = {}) {
     'Per-shot planning metadata schema (write these values as director-script lines inside every Shot block, not as separate commentary):',
     '  {',
     '    "input_mode": "keyframe_image" | "ingredients_sheet",',
+    '    "shotPrompt": "single string; ingredients_sheet shots must contain the exact two labeled parts separated by a newline",',
     '    "locations": ["location or setting name"],',
     '    "accessories": ["prop, wardrobe item, instrument, vehicle, or motif"]',
     '  }',
+  ].join('\n'))
+
+  sections.push([
+    'Shot prompt formatting by input mode:',
+    '  - For Input mode: keyframe_image, keep using the normal Keyframe prompt + Motion prompt fields; any Shot prompt may be a standard single-part scene description.',
+    '  - For Input mode: ingredients_sheet, include a Shot prompt field whose value is one single prompt string split across exactly two lines:',
+    '    Shot prompt: Reference Sheet Description: [comma/semicolon separated inventory of characters, props, and locations shown in the reference sheet]',
+    '    Generated Video: [descriptive scene of the action, camera movement, dialogue/lip-sync, and audio]',
+    '  - The phrases "Reference Sheet Description:" and "Generated Video:" MUST appear verbatim in every ingredients_sheet Shot prompt.',
+    '  - Short example: Shot prompt: Reference Sheet Description: friendly cartoon hedgehog with rounded chestnut-brown fur; cheerful cartoon rabbit; green coiled garden hose; bright interior of Greenfield Home & Garden store',
+    '    Generated Video: cheerful family-animation scene inside the sunlit store, the hedgehog waddles up as the rabbit hops past, camera pushes in gently on the lyric beat.',
   ].join('\n'))
 
   const rules = [
@@ -2288,10 +2303,11 @@ function buildMusicVideoLLMPrompt(options = {}) {
     '  7. Every shot MUST include "Input mode:" with exactly one of these values: "keyframe_image" or "ingredients_sheet". Use "ingredients_sheet" for shots needing strict character, location, wardrobe, prop, or multi-subject consistency; use "keyframe_image" for abstract, dynamic, atmospheric, or one-off imagery.',
     '  8. Every shot MUST include "Locations:" as a comma-separated list of relevant setting/location names, or "none".',
     '  9. Every shot MUST include "Accessories:" as a comma-separated list of important props, wardrobe pieces, instruments, vehicles, or visual motifs, or "none".',
-    '  10. "Keyframe prompt:" describes the opening still and must include location, subject, wardrobe/props, lighting, color palette, composition, and the subject\'s readable emotional state when a person appears.',
-    '  11. "Motion prompt:" describes what moves in the clip: lip-sync/performance action, character movement, camera movement, atmosphere, and any story action. Include camera motion and character blocking/emotion, not just a static description.',
-    '  12. Keep wardrobe, location, and lighting consistent across adjacent shots unless the script deliberately calls for a hard cut.',
-    '  13. Do NOT invent lyrics. If the song is instrumental at a given moment, omit Lyric moment for that shot.',
+    '  10. For ingredients_sheet shots, every Shot prompt MUST use the exact two-part format above and preserve the newline between the two labels.',
+    '  11. "Keyframe prompt:" describes the opening still and must include location, subject, wardrobe/props, lighting, color palette, composition, and the subject\'s readable emotional state when a person appears.',
+    '  12. "Motion prompt:" describes what moves in the clip: lip-sync/performance action, character movement, camera movement, atmosphere, and any story action. Include camera motion and character blocking/emotion, not just a static description.',
+    '  13. Keep wardrobe, location, and lighting consistent across adjacent shots unless the script deliberately calls for a hard cut.',
+    '  14. Do NOT invent lyrics. If the song is instrumental at a given moment, omit Lyric moment for that shot.',
   ]
   sections.push(rules.join('\n'))
 
@@ -2813,6 +2829,8 @@ function buildMusicVideoPassFormatSpec(pass, coveragePlan = null) {
       `Accessories: ${pass === 'environmental_broll' ? 'reflector post' : 'cassette tape'}`,
       `Keyframe prompt: ${keyframeB}`,
       `Motion prompt: ${motionB}`,
+      `Shot prompt: Reference Sheet Description: ${pass === 'environmental_broll' ? 'empty highway bordered by pine forest; single reflector post; overcast sky' : 'car interior dashboard; cassette tape in deck; green dash backlight'}`,
+      `Generated Video: ${motionB}`,
       'Camera: Locked-off, 85mm macro.',
       'Length: 3.2',
       '',
@@ -2836,6 +2854,8 @@ function buildMusicVideoPassFormatSpec(pass, coveragePlan = null) {
     'Accessories: black leather jacket, silver microphone',
     'Keyframe prompt: Singer leans against a neon-lit phone booth, rain-slick street behind her, warm sodium-lamp glow.',
     'Motion prompt: Slow push-in on the singer as she mouths the opening line, rain falling around her, headlights flaring in the distance.',
+    'Shot prompt: Reference Sheet Description: singer in black leather jacket; silver microphone; neon phone booth; rain-slick street with warm sodium-lamp glow',
+    'Generated Video: slow push-in on the singer as she mouths the opening line, rain falling around her, headlights flaring in the distance.',
     'Camera: Slow dolly forward, eye level, 35mm lens.',
     'Length: 4.5',
     '',

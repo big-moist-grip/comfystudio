@@ -17,6 +17,7 @@ const STRUCTURED_FIELD_PATTERNS = Object.freeze([
   { key: 'coverageLabel', pattern: /^(?:coverage\s*label|coverage)\s*:\s*(.*)$/i },
   { key: 'shotType', pattern: /^(?:shot\s*type|framing)\s*:\s*(.*)$/i },
   { key: 'keyframePrompt', pattern: /^(?:keyframe\s*prompt|image\s*action|opening\s*frame|keyframe)\s*:\s*(.*)$/i },
+  { key: 'shotPrompt', pattern: /^(?:shot\s*prompt)\s*:\s*(.*)$/i },
   { key: 'motionPrompt', pattern: /^(?:motion\s*prompt|video\s*action|video\s*prompt|motion)\s*:\s*(.*)$/i },
   { key: 'camera', pattern: /^(?:camera|camera\s*direction|camera\s*setup|camera\s*mode)\s*:\s*(.*)$/i },
   // `length` is a music-video-friendly alias for duration. Ad scripts still
@@ -168,6 +169,17 @@ function compactPromptText(text = '') {
   return String(text || '').replace(/\s+/g, ' ').trim()
 }
 
+function preservePromptText(text = '') {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+}
+
 function seededUnit(seed) {
   const x = Math.sin(Number(seed) * 12.9898 + 78.233) * 43758.5453
   return x - Math.floor(x)
@@ -298,6 +310,10 @@ export function parseStructuredDirectorScript(script = '', options = {}) {
     const text = String(value || '').trim()
     if (!text) return
     const existing = String(target[fieldName] || '').trim()
+    if (fieldName === 'shotPrompt') {
+      target[fieldName] = existing ? `${existing}\n${text}` : text
+      return
+    }
     target[fieldName] = existing ? `${existing} ${text}` : text
   }
 
@@ -379,6 +395,7 @@ export function parseStructuredDirectorScript(script = '', options = {}) {
       // Keyframe + motion prompts stay full-length for editing and generation.
       // Cards and compact labels should truncate visually in the UI only.
       keyframePromptRaw: compactPromptText(currentShot.keyframePrompt || ''),
+      shotPromptRaw: preservePromptText(currentShot.shotPrompt || ''),
       motionPromptRaw: compactPromptText(currentShot.motionPrompt || ''),
       locked: false,
     })
@@ -498,6 +515,7 @@ export function parseStructuredDirectorScript(script = '', options = {}) {
         label: shotHeading.label,
         shotType: '',
         keyframePrompt: '',
+        shotPrompt: '',
         motionPrompt: '',
         camera: '',
         duration: '',

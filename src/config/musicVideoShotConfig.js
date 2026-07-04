@@ -251,6 +251,8 @@ Locations: car interior, night highway
 Accessories: warm key light, steering wheel
 Keyframe prompt: Close-up of the singer in the driver's seat, interior dim, a single warm key light across the face, eyes fixed forward on the road.
 Motion prompt: Singer lip-syncs the line naturally, a subtle head tilt and a single slow blink, no big motion.
+Shot prompt: Reference Sheet Description: rose in the driver's seat; dim car interior; warm key light across her face; steering wheel and night highway
+Generated Video: singer lip-syncs the line naturally, a subtle head tilt and a single slow blink, the camera holding steady in the dim car.
 Camera: Locked medium close-up, shallow focus
 Length: 4
 
@@ -264,6 +266,8 @@ Locations: car interior, rear window neon
 Accessories: steering wheel, passing neon signs
 Keyframe prompt: Three-quarter wide of the singer framed by the car interior, blurred neon signs streaming past through the rear window.
 Motion prompt: Gentle forward lean, shoulder sway on the downbeat, hand taps the wheel once on the accent.
+Shot prompt: Reference Sheet Description: jake framed by the car interior; steering wheel; passing neon signs; rear window streaked with color
+Generated Video: gentle forward lean, shoulder sway on the downbeat, one hand taps the wheel on the accent as neon slips past behind him.
 Camera: Slow push-in from the passenger side, shallow focus
 Length: 3
 
@@ -277,6 +281,8 @@ Locations: car front seats, neon windshield
 Accessories: windshield neon streaks, warm dashboard glow
 Keyframe prompt: Two-shot of both singers side by side in the front seats, warm interior glow, windshield reflecting neon streaks.
 Motion prompt: Both sing together, heads angled slightly toward each other on the held note, subtle sway on the beat.
+Shot prompt: Reference Sheet Description: rose and jake side by side in the front seats; warm dashboard glow; windshield neon streaks; car interior
+Generated Video: both sing together, heads angled slightly toward each other on the held note, subtle sway on the beat while the camera holds the two-shot.
 Camera: Locked two-shot, shallow focus
 Length: 3
 
@@ -298,6 +304,8 @@ Length: 2
 # Use ingredients_sheet when the shot depends on strict character, location,
 # wardrobe, prop, or multi-subject continuity. "Locations:" and "Accessories:"
 # are comma-separated lists, or "none".
+# For ingredients_sheet shots, add a two-line Shot prompt with the exact labels
+# "Reference Sheet Description:" and "Generated Video:".
 # The script is the creative source of truth: put story, setting, wardrobe,
 # lighting, color palette, continuity, and camera style directly in each
 # Keyframe prompt and Motion prompt.

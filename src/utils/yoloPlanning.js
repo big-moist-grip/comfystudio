@@ -387,6 +387,7 @@ export function parseStructuredDirectorScript(script = '', options = {}) {
       // Music-video dual-input pass-through. The music planner normalizes
       // these into shot.input_mode, shot.locations, and shot.accessories.
       inputModeRaw: sanitizeSnippet(currentShot.inputMode || '', 40),
+      keyframeIdRaw: sanitizeSnippet(currentShot.preExistingKeyframeId || '', 80),
       preExistingKeyframeIdRaw: sanitizeSnippet(currentShot.preExistingKeyframeId || '', 80),
       locationsRaw: sanitizeSnippet(currentShot.locations || '', 260),
       accessoriesRaw: sanitizeSnippet(currentShot.accessories || '', 260),

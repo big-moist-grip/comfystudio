@@ -1693,7 +1693,7 @@ function buildMusicVideoPlanFromScript(options = {}) {
       const inputMode = normalizeShotInputMode(scriptShot.inputModeRaw || scriptShot.input_mode)
       const locations = normalizeShotStringList(scriptShot.locations || scriptShot.locationsRaw)
       const accessories = normalizeShotStringList(scriptShot.accessories || scriptShot.accessoriesRaw)
-      const preExistingKeyframeId = String(scriptShot.preExistingKeyframeIdRaw || scriptShot.preExistingKeyframeId || '').trim()
+      const preExistingKeyframeId = String(scriptShot.keyframeIdRaw || scriptShot.preExistingKeyframeIdRaw || scriptShot.keyframeId || scriptShot.preExistingKeyframeId || '').trim()
       const explicitShotPrompt = String(scriptShot.shotPromptRaw || '').trim()
 
       const composedVideoPrompt = composeMusicShotVideoPrompt({
@@ -1742,6 +1742,7 @@ function buildMusicVideoPlanFromScript(options = {}) {
           angles: ['Medium shot'],
           cameraPresetId: 'auto',
           input_mode: inputMode,
+          keyframeId: preExistingKeyframeId,
           preExistingKeyframeId,
           ingredientsSheetAssetId: '',
           locations,
@@ -7167,8 +7168,61 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         map.set(key, asset)
       }
     }
+    if (yoloModeKey === 'music') {
+      const assetById = new Map()
+      for (const asset of assets || []) {
+        if (asset?.id) assetById.set(String(asset.id), asset)
+      }
+      const preExistingById = new Map()
+      for (const keyframe of yoloMusicKeyframes || []) {
+        if (keyframe?.id) preExistingById.set(String(keyframe.id), keyframe)
+      }
+      const variantByShot = new Map()
+      for (const variant of yoloQueueVariants || []) {
+        const shotKey = `${variant?.sceneId || ''}|${variant?.shotId || ''}`
+        if (shotKey !== '|' && variant?.key && !variantByShot.has(shotKey)) {
+          variantByShot.set(shotKey, variant)
+        }
+      }
+      for (const scene of yoloActivePlan || []) {
+        for (const shot of scene?.shots || []) {
+          const preExistingKeyframeId = String(shot?.preExistingKeyframeId || shot?.keyframeId || '').trim()
+          if (!preExistingKeyframeId) continue
+          const variant = variantByShot.get(`${scene?.id || ''}|${shot?.id || ''}`)
+          if (!variant?.key || map.has(variant.key)) continue
+          const keyframe = preExistingById.get(preExistingKeyframeId)
+          const sourceAssetId = String(keyframe?.imageAssetId || '').trim()
+          const sourceAsset = sourceAssetId ? assetById.get(sourceAssetId) : null
+          if (!sourceAsset || sourceAsset.type !== 'image') continue
+          map.set(variant.key, {
+            ...sourceAsset,
+            yolo: {
+              ...(sourceAsset.yolo || {}),
+              mode: 'music',
+              stage: 'storyboard',
+              workflowId: 'pre-existing-keyframe',
+              key: variant.key,
+              variantKey: variant.key,
+              sceneId: variant.sceneId,
+              shotId: variant.shotId,
+              angle: variant.angle,
+              take: variant.take,
+              durationSeconds: variant.durationSeconds,
+              preExistingKeyframeId,
+              sourceAssetId: sourceAsset.id,
+            },
+            settings: {
+              ...(sourceAsset.settings || {}),
+              preExistingKeyframe: true,
+              preExistingKeyframeId,
+              sourceAssetId: sourceAsset.id,
+            },
+          })
+        }
+      }
+    }
     return map
-  }, [assets, yoloModeKey])
+  }, [assets, yoloActivePlan, yoloModeKey, yoloMusicKeyframes, yoloQueueVariants])
   const yoloStoryboardReadyCount = useMemo(
     () => yoloQueueVariants.filter((variant) => yoloStoryboardAssetMap.has(variant.key)).length,
     [yoloQueueVariants, yoloStoryboardAssetMap]
@@ -9071,6 +9125,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         const nextMode = normalizeShotInputMode(patch.input_mode)
         nextShot.input_mode = nextMode
         if (nextMode === 'keyframe_image') nextShot.ingredientsSheetAssetId = ''
+        if (nextMode === 'ingredients_sheet') {
+          nextShot.preExistingKeyframeId = ''
+          nextShot.keyframeId = ''
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'preExistingKeyframeId')) {
+        const preExistingKeyframeId = String(patch.preExistingKeyframeId || '').trim()
+        nextShot.preExistingKeyframeId = preExistingKeyframeId
+        nextShot.keyframeId = preExistingKeyframeId
+        if (preExistingKeyframeId) {
+          nextShot.input_mode = 'keyframe_image'
+          nextShot.ingredientsSheetAssetId = ''
+        }
       }
       if (Object.prototype.hasOwnProperty.call(patch, 'ingredientsSheetAssetId')) {
         nextShot.ingredientsSheetAssetId = String(patch.ingredientsSheetAssetId || '').trim()

@@ -917,6 +917,20 @@ export default function MusicVideoEasyMode({
     () => ingredientsSheetAssets.find((asset) => asset?.id === ingredientsSheetAssetId) || null,
     [ingredientsSheetAssetId, ingredientsSheetAssets]
   )
+  const validPreExistingKeyframes = useMemo(() => (
+    (yoloMusicKeyframes || []).filter((entry) => {
+      const hasImage = Boolean(entry?.imageAssetId && imageAssets.some((asset) => asset?.id === entry.imageAssetId))
+      const hasLocationContext = Boolean(entry?.locationId || String(entry?.locationDescription || '').trim())
+      return hasImage && hasLocationContext
+    })
+  ), [imageAssets, yoloMusicKeyframes])
+  const getPreExistingKeyframeLabel = (entry) => {
+    const keyframeId = String(entry?.id || '').trim()
+    const linkedLocation = (yoloMusicLocations || []).find((location) => location?.id === entry?.locationId) || null
+    const locationText = linkedLocation?.name || entry?.locationDescription || 'Unlabeled location'
+    const asset = imageAssets.find((item) => item?.id === entry?.imageAssetId) || null
+    return [keyframeId, locationText, asset?.name].filter(Boolean).join(' - ')
+  }
   const plannedShotCount = flatShots.length
   const queueVariantCount = Array.isArray(yoloQueueVariants) ? yoloQueueVariants.length : 0
   const videoReadyCount = useMemo(
@@ -1254,6 +1268,16 @@ export default function MusicVideoEasyMode({
   const handleShotInputModeChange = (row, inputMode) => {
     updateShotInput(row, { input_mode: inputMode })
     setKeyframeStatus('')
+    setVideoStatus('')
+  }
+
+  const handleAssignPreExistingKeyframe = (row, keyframeId) => {
+    if (!row?.shot || !keyframeId) return
+    updateShotInput(row, {
+      input_mode: 'keyframe_image',
+      preExistingKeyframeId: keyframeId,
+    })
+    setKeyframeStatus(`Assigned pre-existing keyframe to ${row.shot.scriptShotLabel || row.scene?.label || 'shot'}.`)
     setVideoStatus('')
   }
 
@@ -1604,6 +1628,42 @@ export default function MusicVideoEasyMode({
       {label}
     </button>
   )
+
+  const renderAssignPreExistingKeyframeControl = (row, index, compact = false) => {
+    if (!row?.shot || getShotInputMode(row.shot) !== 'keyframe_image') return null
+    const variant = getVariantForShot(row.scene?.id, row.shot?.id)
+    const selectedId = String(row.shot.preExistingKeyframeId || row.shot.keyframeId || '').trim()
+    const hasKeyframe = Boolean(variant?.key && yoloStoryboardAssetMap?.has(variant.key))
+    if (hasKeyframe && !selectedId) return null
+    return (
+      <select
+        value={selectedId}
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => {
+          event.stopPropagation()
+          const keyframeId = event.target.value
+          if (keyframeId) {
+            handleAssignPreExistingKeyframe(row, keyframeId)
+          } else {
+            updateShotInput(row, { preExistingKeyframeId: '' })
+            setKeyframeStatus('')
+          }
+        }}
+        disabled={!handleYoloShotInputChange || yoloActivePlanIsStale || validPreExistingKeyframes.length === 0}
+        className={`rounded-md border border-sf-dark-600 bg-sf-dark-900/85 text-[10px] font-semibold text-sf-text-secondary outline-none transition-colors focus:border-sf-accent disabled:cursor-not-allowed disabled:opacity-50 ${
+          compact ? 'max-w-[12rem] px-2 py-1' : 'min-w-[12rem] px-2 py-1.5'
+        }`}
+        title={validPreExistingKeyframes.length === 0 ? 'Add a ready pre-existing keyframe first.' : 'Assign a pre-existing first-frame image to this shot.'}
+      >
+        <option value="">{validPreExistingKeyframes.length === 0 ? 'No pre-keyframes ready' : 'Assign Pre-existing Keyframe'}</option>
+        {validPreExistingKeyframes.map((entry) => (
+          <option key={entry.id} value={entry.id}>
+            {getPreExistingKeyframeLabel(entry)}
+          </option>
+        ))}
+      </select>
+    )
+  }
 
   const renderShotInputModeControl = (row, compact = false) => {
     if (!row?.shot) return null
@@ -2013,7 +2073,7 @@ export default function MusicVideoEasyMode({
       })
       return list
     })
-    setLocationsStatus('Added a blank location. Add a name, description, and optional keyframe image.')
+    setLocationsStatus('Added a blank location. Add a name, description, and optional reference image.')
   }
 
   const handleImportLocationKeyframe = async () => {
@@ -3822,6 +3882,7 @@ export default function MusicVideoEasyMode({
                           <>
                             {renderKeyframeRunButton({ scene, shot }, index)}
                             {renderReplaceKeyframeButton({ scene, shot }, index)}
+                            {renderAssignPreExistingKeyframeControl({ scene, shot }, index, true)}
                           </>
                         )}
                         {renderCopyPromptButton(keyframePrompt, `Shot ${index + 1} keyframe prompt copied.`, setKeyframeStatus)}
@@ -3865,6 +3926,9 @@ export default function MusicVideoEasyMode({
                     : null}
                   {!hasMultipleSelectedShots && getShotInputMode(selectedShotRow.shot) !== 'ingredients_sheet'
                     ? renderReplaceKeyframeButton(selectedShotRow, selectedShotIndex, 'Replace Keyframe')
+                    : null}
+                  {!hasMultipleSelectedShots && getShotInputMode(selectedShotRow.shot) !== 'ingredients_sheet'
+                    ? renderAssignPreExistingKeyframeControl(selectedShotRow, selectedShotIndex)
                     : null}
                   {(!selectedIncludesIngredientsMode || hasMultipleSelectedShots) && (
                     <button

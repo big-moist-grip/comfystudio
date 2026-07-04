@@ -4671,19 +4671,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     const inferred = assetStyle || currentTags
     return inferred ? `Song style / genre tags: ${inferred}` : ''
   }, [musicTags, yoloMusicAudioAsset, yoloMusicStyleNotes])
-  // Single-source-of-truth parse of the user-pasted Lyrics field. The field
-  // auto-detects whether the paste is plain text, SRT, or LRC. When the
-  // format is 'srt' or 'lrc', we consider the lyrics "timed" and the
-  // planner uses the per-line timings; when the format is 'unknown' or
-  // 'empty' we treat the paste as plain lyrics and fall through to the
-  // legacy tagged/linear-estimate resolver.
+  // Single-source-of-truth parse of the active Lyrics source. This can be the
+  // selected SRT asset text or the user-pasted Lyrics field. When the format is
+  // 'srt' or 'lrc', we consider the lyrics "timed" and the planner uses the
+  // per-line timings; when the format is 'unknown' or 'empty' we treat the
+  // paste as plain lyrics and fall through to the legacy tagged/linear-estimate
+  // resolver.
   const yoloMusicParsedLyrics = useMemo(() => {
-    const format = detectTimedLyricsFormat(yoloMusicLyrics)
+    const format = detectTimedLyricsFormat(yoloMusicPromptLyrics)
     if (format === 'srt' || format === 'lrc') {
-      return { ...parseTimedLyrics(yoloMusicLyrics), isTimed: true }
+      return { ...parseTimedLyrics(yoloMusicPromptLyrics), isTimed: true }
     }
     return { format, lines: [], error: null, isTimed: false }
-  }, [yoloMusicLyrics])
+  }, [yoloMusicPromptLyrics])
   const yoloMusicProvidedLyricsLines = useMemo(
     () => getPlainMusicLyricLines(yoloMusicProvidedLyrics),
     [yoloMusicProvidedLyrics]
@@ -5858,16 +5858,33 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   ])
 
   const handleYoloMusicTranscribeSrt = useCallback(async () => {
-    if (!yoloMusicAudioAsset) {
-      setFormError('Select the song audio asset first')
-      return
-    }
     if (yoloMusicTranscribingSrt) return
 
     const providedLyricsText = String(yoloMusicProvidedLyrics || '').trim()
     const providedLyricsLines = getPlainMusicLyricLines(providedLyricsText)
     const shouldAlignProvidedLyrics = Boolean(yoloMusicAlignProvidedLyrics && providedLyricsLines.length > 0)
-    const outputLyricsText = String(yoloMusicLyrics || '').trim()
+    const outputLyricsText = String(yoloMusicPromptLyrics || '').trim()
+    const outputLyricsFormat = detectTimedLyricsFormat(outputLyricsText)
+    const outputLyricsAreTimed = outputLyricsFormat === 'srt' || outputLyricsFormat === 'lrc'
+    if (outputLyricsAreTimed) {
+      const parsed = parseTimedLyrics(outputLyricsText)
+      if (Array.isArray(parsed.lines) && parsed.lines.length > 0) {
+        setFormError(null)
+        setYoloMusicLyrics(outputLyricsText)
+        setYoloMusicAlignProvidedLyrics(false)
+        setYoloMusicTranscriptionStatus(`Loaded ${parsed.lines.length} timed lyric line${parsed.lines.length === 1 ? '' : 's'} from existing ${outputLyricsFormat.toUpperCase()} text. No ASR transcription was run.`)
+        addComfyLog('status', `Music video timing loaded from existing ${outputLyricsFormat.toUpperCase()} lyrics`)
+        return
+      }
+      setFormError(`Could not parse the current ${outputLyricsFormat.toUpperCase()} lyrics. Check the timestamp format before preparing timing.`)
+      setYoloMusicTranscriptionStatus('')
+      return
+    }
+
+    if (!yoloMusicAudioAsset) {
+      setFormError('Select the song audio asset first')
+      return
+    }
 
     if (outputLyricsText && !shouldAlignProvidedLyrics) {
       const shouldReplace = window.confirm(
@@ -5927,7 +5944,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicAlignProvidedLyrics,
     yoloMusicAsrLanguage,
     yoloMusicAudioAsset,
-    yoloMusicLyrics,
+    yoloMusicPromptLyrics,
     yoloMusicProvidedLyrics,
     yoloMusicTranscribingSrt,
   ])
@@ -14669,8 +14686,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                               <button
                                 type="button"
                                 onClick={handleYoloMusicTranscribeSrt}
-                                disabled={!yoloMusicAudioAsset || yoloMusicTranscribingSrt}
-                                title={yoloMusicAudioAsset
+                                disabled={(!yoloMusicAudioAsset && !(yoloMusicParsedLyrics.isTimed && yoloMusicParsedLyrics.lines.length > 0)) || yoloMusicTranscribingSrt}
+                                title={yoloMusicParsedLyrics.isTimed && yoloMusicParsedLyrics.lines.length > 0
+                                  ? 'Use the existing timed lyrics/SRT without running ASR.'
+                                  : yoloMusicAudioAsset
                                   ? (yoloMusicAlignProvidedLyrics
                                     ? 'Align the pasted plain lyrics to the song audio and write the timed SRT output below.'
                                     : 'Transcribe the song audio into SRT and write it into the output box.')
@@ -14682,7 +14701,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                 ) : (
                                   <Wand2 className="h-3 w-3" />
                                 )}
-                                {yoloMusicAlignProvidedLyrics ? 'Prepare Timing' : 'Transcribe song audio to SRT'}
+                                {yoloMusicParsedLyrics.isTimed && yoloMusicParsedLyrics.lines.length > 0
+                                  ? 'Use existing timing'
+                                  : yoloMusicAlignProvidedLyrics ? 'Prepare Timing' : 'Transcribe song audio to SRT'}
                               </button>
                             </div>
                           </div>

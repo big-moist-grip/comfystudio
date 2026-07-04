@@ -924,7 +924,12 @@ export default function MusicVideoEasyMode({
     () => getSrtAssetText(selectedSrtAsset),
     [selectedSrtAsset]
   )
+  const selectedSrtLineCount = useMemo(
+    () => selectedSrtText.split(/\r?\n/).filter(Boolean).length,
+    [selectedSrtText]
+  )
   const timedLineCount = Array.isArray(yoloMusicParsedLyrics?.lines) ? yoloMusicParsedLyrics.lines.length : 0
+  const hasTimedLyrics = Boolean(yoloMusicParsedLyrics?.isTimed && timedLineCount > 0)
   const providedLyricsLineCount = useMemo(
     () => String(yoloMusicProvidedLyrics || '')
       .split(/\r?\n/)
@@ -1140,6 +1145,8 @@ export default function MusicVideoEasyMode({
       setYoloMusicAlignProvidedLyrics?.(false)
       setParseStatus('')
       setVideoStatus('')
+      const lineCount = srtText.split(/\r?\n/).filter(Boolean).length
+      setBriefStatus(`LLM brief updated with ${lineCount} SRT text line${lineCount === 1 ? '' : 's'} from ${asset?.name || 'selected asset'}.`)
     } else {
       setParseStatus(`Selected SRT asset "${asset?.name || nextAssetId}" does not include readable text.`)
     }
@@ -2293,11 +2300,11 @@ export default function MusicVideoEasyMode({
             <button
               type="button"
               onClick={handleYoloMusicTranscribeSrt}
-              disabled={!yoloMusicAudioAsset || yoloMusicTranscribingSrt}
+              disabled={(!yoloMusicAudioAsset && !hasTimedLyrics) || yoloMusicTranscribingSrt}
               className="inline-flex items-center gap-2 rounded-lg border border-sf-accent/50 bg-sf-accent/10 px-3 py-2 text-xs font-semibold text-sf-accent transition-colors hover:bg-sf-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {yoloMusicTranscribingSrt ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-              {yoloMusicTranscribingSrt ? 'Preparing' : 'Prepare Timing'}
+              {yoloMusicTranscribingSrt ? 'Preparing' : hasTimedLyrics ? 'Use Existing Timing' : 'Prepare Timing'}
             </button>
             {timedLineCount > 0 && (
               <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-200">
@@ -2372,7 +2379,7 @@ export default function MusicVideoEasyMode({
               {selectedSrtAsset && (
                 <p className="mt-1 text-[10px] leading-4 text-sf-text-muted">
                   {selectedSrtText
-                    ? `Loaded ${selectedSrtText.split(/\r?\n/).filter(Boolean).length} SRT text line${selectedSrtText.split(/\r?\n/).filter(Boolean).length === 1 ? '' : 's'} from ${selectedSrtAsset.name || 'selected asset'}.`
+                    ? `Loaded ${selectedSrtLineCount} SRT text line${selectedSrtLineCount === 1 ? '' : 's'} from ${selectedSrtAsset.name || 'selected asset'}.`
                     : 'Selected SRT asset has no readable text stored yet.'}
                 </p>
               )}

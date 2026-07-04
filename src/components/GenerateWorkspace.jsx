@@ -1214,6 +1214,19 @@ function getSrtAssetText(asset) {
   return String(asset.text || asset.rawText || asset.content || '').trim()
 }
 
+function normalizeMusicLocationEntry(entry, index = 0) {
+  const id = String(entry?.id || `location-${index + 1}`).trim()
+  const name = String(entry?.name || '').trim()
+  const description = String(entry?.description || '').trim()
+  const assetId = entry?.assetId ?? null
+  return {
+    id,
+    name,
+    description,
+    assetId,
+  }
+}
+
 function normalizeShotForScene(sceneId, shot, shotIndex, fallback = {}, options = {}) {
   const minDurationSeconds = Math.max(0.1, Number(options.minDurationSeconds) || 2)
   const maxDurationSeconds = Math.max(minDurationSeconds, Number(options.maxDurationSeconds) || 5)
@@ -2177,6 +2190,7 @@ function buildMusicVideoLLMPrompt(options = {}) {
     styleNotes = '',
     lyrics = '',
     cast = [],
+    locations = [],
     pass = 'master',
     variantDescriptor = '',
     masterScript = '',
@@ -2233,6 +2247,23 @@ function buildMusicVideoLLMPrompt(options = {}) {
     } else {
       sections.push('Cast: (no cast defined — you may omit the Artist: field entirely, or use "Artist: artist" as a generic slot).')
     }
+  }
+
+  if (Array.isArray(locations) && locations.length > 0) {
+    const locationBlock = ['AVAILABLE LOCATIONS:']
+    for (const location of locations) {
+      const name = String(location?.name || '').trim()
+      if (!name) continue
+      const description = String(location?.description || '').trim()
+      const hasReference = location?.assetId ? 'Reference Image Attached' : 'No Reference Image'
+      locationBlock.push(`Name: ${name}${description ? `, Description: ${description}` : ''} (${hasReference})`)
+    }
+    if (locationBlock.length > 1) {
+      locationBlock.push('Assign one of these Available Locations to each shot\'s Locations field using the Location Name exactly.')
+      sections.push(locationBlock.join('\n'))
+    }
+  } else {
+    sections.push('AVAILABLE LOCATIONS: (none defined yet — use concise location names in each shot, but prefer project-defined names once available).')
   }
 
   if (concept.trim()) {
@@ -2302,6 +2333,7 @@ function buildMusicVideoLLMPrompt(options = {}) {
     '  6. Use "Artist:" to pick which cast member appears only when that person is visibly present. Omit when the shot is b_roll with no performer visible.',
     '  7. Every shot MUST include "Input mode:" with exactly one of these values: "keyframe_image" or "ingredients_sheet". Use "ingredients_sheet" for shots needing strict character, location, wardrobe, prop, or multi-subject consistency; use "keyframe_image" for abstract, dynamic, atmospheric, or one-off imagery.',
     '  8. Every shot MUST include "Locations:" as a comma-separated list of relevant setting/location names, or "none".',
+    '  8a. If AVAILABLE LOCATIONS are provided, every shot MUST assign one of those Location Names in "Locations:" unless the shot is explicitly placeless/abstract.',
     '  9. Every shot MUST include "Accessories:" as a comma-separated list of important props, wardrobe pieces, instruments, vehicles, or visual motifs, or "none".',
     '  10. For ingredients_sheet shots, every Shot prompt MUST use the exact two-part format above and preserve the newline between the two labels.',
     '  11. "Keyframe prompt:" describes the opening still and must include location, subject, wardrobe/props, lighting, color palette, composition, and the subject\'s readable emotional state when a person appears.',
@@ -3381,6 +3413,7 @@ function collectGenerateWorkspaceAssetIds(state) {
   ]
   Object.values(state?.selectedAssetFieldIds || {}).forEach((assetId) => ids.push(assetId))
   ;(Array.isArray(state?.yoloMusicCast) ? state.yoloMusicCast : []).forEach((entry) => ids.push(entry?.assetId))
+  ;(Array.isArray(state?.yoloMusicLocations) ? state.yoloMusicLocations : []).forEach((entry) => ids.push(entry?.assetId))
   return ids.map((id) => String(id || '').trim()).filter(Boolean)
 }
 
@@ -3686,6 +3719,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       }))
       .filter((entry) => entry.assetId || entry.label || entry.slug)
   })
+  const [yoloMusicLocations, setYoloMusicLocations] = useState(() => {
+    const saved = Array.isArray(persistedState?.yoloMusicLocations) ? persistedState.yoloMusicLocations : []
+    return saved
+      .map((entry, idx) => normalizeMusicLocationEntry(entry, idx))
+      .filter((entry) => entry.name || entry.description || entry.assetId)
+  })
   const [yoloMusicTargetDuration, setYoloMusicTargetDuration] = useState(persistedState?.yoloMusicTargetDuration || 30)
   const [yoloMusicQualityProfile, setYoloMusicQualityProfile] = useState(persistedState?.yoloMusicQualityProfile || 'balanced')
   const [yoloMusicKeyframeWorkflowId, setYoloMusicKeyframeWorkflowId] = useState(() => {
@@ -3754,6 +3793,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const [creatingStoryboardPdf, setCreatingStoryboardPdf] = useState(false)
   const [yoloMusicAudioImporting, setYoloMusicAudioImporting] = useState(false)
   const [yoloMusicCastImageImporting, setYoloMusicCastImageImporting] = useState(false)
+  const [yoloMusicLocationImageImporting, setYoloMusicLocationImageImporting] = useState(false)
   const [yoloMusicTranscribingSrt, setYoloMusicTranscribingSrt] = useState(false)
   const [yoloMusicTranscriptionStatus, setYoloMusicTranscriptionStatus] = useState('')
   const [confirmDialog, setConfirmDialog] = useState(null) // { title, message, confirmLabel, cancelLabel, tone }
@@ -3971,6 +4011,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         yoloMusicAltScripts,
         yoloMusicArtistAssetId,
         yoloMusicCast,
+        yoloMusicLocations,
         yoloMusicTargetDuration,
         yoloMusicQualityProfile,
         yoloMusicKeyframeWorkflowId,
@@ -4063,6 +4104,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicAltScripts,
     yoloMusicArtistAssetId,
     yoloMusicCast,
+    yoloMusicLocations,
     yoloMusicTargetDuration,
     yoloMusicQualityProfile,
     yoloMusicKeyframeWorkflowId,
@@ -4871,6 +4913,101 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     currentProjectHandle,
     saveProject,
     yoloMusicCastImageImporting,
+  ])
+  const handleImportYoloMusicLocationImage = useCallback(async () => {
+    if (yoloMusicLocationImageImporting) return null
+    if (!currentProjectHandle) {
+      setFormError('Open or create a project first so ComfyStudio can import the location keyframe.')
+      addComfyLog('error', 'Location keyframe import requires an open project folder.')
+      return null
+    }
+
+    let selectedFile = null
+    try {
+      if (isElectron() && window.electronAPI?.selectFile) {
+        selectedFile = await window.electronAPI.selectFile({
+          title: 'Select location keyframe image',
+          filters: [
+            { name: 'Image Files', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff'] },
+            { name: 'All Files', extensions: ['*'] },
+          ],
+        })
+      } else {
+        selectedFile = await new Promise((resolve) => {
+          const input = document.createElement('input')
+          input.type = 'file'
+          input.accept = 'image/*,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff'
+          input.onchange = () => resolve(input.files?.[0] || null)
+          input.click()
+        })
+      }
+    } catch (error) {
+      const message = error?.message || 'Unknown file picker error'
+      setFormError(`Could not open location keyframe picker: ${message}`)
+      addComfyLog('error', `Could not open location keyframe picker: ${message}`)
+      return null
+    }
+    if (!selectedFile) return null
+    if (typeof selectedFile !== 'string' && selectedFile.type && !String(selectedFile.type).startsWith('image/')) {
+      const message = 'Only image files can be used as location keyframes.'
+      setFormError(message)
+      addComfyLog('error', message)
+      return null
+    }
+
+    setFormError(null)
+    setYoloMusicLocationImageImporting(true)
+
+    try {
+      const assetInfo = await importAsset(currentProjectHandle, selectedFile, 'images')
+      const sessionUrl = typeof selectedFile !== 'string'
+        ? URL.createObjectURL(selectedFile)
+        : assetInfo.path
+          ? await getProjectFileUrl(currentProjectHandle, assetInfo.path)
+          : null
+      const newAsset = addAsset({
+        ...assetInfo,
+        type: 'image',
+        url: sessionUrl || assetInfo.url || '',
+        isImported: true,
+        settings: {
+          ...(assetInfo.settings || {}),
+          width: assetInfo.width,
+          height: assetInfo.height,
+          referenceRole: 'location_keyframe',
+        },
+      })
+      if (!newAsset) throw new Error('Could not register imported location keyframe.')
+
+      const rawName = String(newAsset.name || assetInfo.name || 'Location keyframe')
+      const displayName = rawName.replace(/\.[a-z0-9]{1,8}$/i, '').replace(/[_-]+/g, ' ').trim() || 'Location keyframe'
+      setYoloMusicLocations((prev) => {
+        const list = Array.isArray(prev) ? [...prev] : []
+        list.push({
+          id: `location-${Date.now()}-${list.length}`,
+          name: displayName,
+          description: '',
+          assetId: newAsset.id,
+        })
+        return list
+      })
+      await saveProject?.()
+      addComfyLog('status', `Imported location keyframe: ${newAsset.name || displayName}`)
+      return newAsset
+    } catch (error) {
+      const message = error?.message || 'Unknown import error'
+      setFormError(`Could not import location keyframe: ${message}`)
+      addComfyLog('error', `Could not import location keyframe: ${message}`)
+      return null
+    } finally {
+      setYoloMusicLocationImageImporting(false)
+    }
+  }, [
+    addAsset,
+    addComfyLog,
+    currentProjectHandle,
+    saveProject,
+    yoloMusicLocationImageImporting,
   ])
   const createYoloMusicCustomKeyframeStarter = useCallback(async () => {
     const starter = {
@@ -6235,6 +6372,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     castSignature: yoloMusicResolvedCast
       .map((c) => `${c.slug}:${c.assetId}:${c.role || ''}`)
       .join('|'),
+    locationSignature: yoloMusicLocations
+      .map((location) => `${location?.name || ''}:${location?.assetId || ''}:${location?.description || ''}`)
+      .join('|'),
     lyrics: yoloMusicPromptLyrics,
     script: String(script ?? yoloMusicScript),
     concept: String(concept ?? yoloMusicConcept),
@@ -6249,6 +6389,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicPromptLyrics,
     yoloMusicQualityProfile,
     yoloMusicResolvedCast,
+    yoloMusicLocations,
     yoloMusicScript,
     yoloMusicStyleNotes,
     yoloMusicTargetDuration,
@@ -9190,6 +9331,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       styleNotes: yoloMusicBriefStyleNotes,
       lyrics: yoloMusicPromptLyrics,
       cast: yoloMusicResolvedCast,
+      locations: yoloMusicLocations,
       pass: passType,
       variantDescriptor,
       masterScript: yoloMusicScript,
@@ -9202,6 +9344,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicBriefStyleNotes,
     yoloMusicPromptLyrics,
     yoloMusicResolvedCast,
+    yoloMusicLocations,
     yoloMusicScript,
   ])
 
@@ -9214,6 +9357,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       styleNotes: yoloMusicBriefStyleNotes,
       lyrics: yoloMusicPromptLyrics,
       cast: yoloMusicResolvedCast,
+      locations: yoloMusicLocations,
       coveragePlan: options.coveragePlan || null,
     })
     await copyTextToClipboard(llmPrompt)
@@ -9228,6 +9372,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicBriefStyleNotes,
     yoloMusicPromptLyrics,
     yoloMusicResolvedCast,
+    yoloMusicLocations,
   ])
 
   /**
@@ -14498,6 +14643,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     yoloMusicCast={yoloMusicCast}
                     yoloMusicResolvedCast={yoloMusicResolvedCast}
                     setYoloMusicCast={setYoloMusicCast}
+                    yoloMusicLocations={yoloMusicLocations}
+                    setYoloMusicLocations={setYoloMusicLocations}
                     yoloMusicKeyframeWorkflowId={yoloStoryboardWorkflowId}
                     setYoloMusicKeyframeWorkflowId={setYoloMusicKeyframeWorkflowId}
                     yoloMusicKeyframeWorkflowOptions={YOLO_MUSIC_KEYFRAME_WORKFLOW_OPTIONS}
@@ -14527,6 +14674,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     handleYoloMusicCastNotesChange={handleYoloMusicCastNotesChange}
                     handleImportYoloMusicCastImage={handleImportYoloMusicCastImage}
                     yoloMusicCastImageImporting={yoloMusicCastImageImporting}
+                    handleImportYoloMusicLocationImage={handleImportYoloMusicLocationImage}
+                    yoloMusicLocationImageImporting={yoloMusicLocationImageImporting}
                     queuePeopleWizardJob={queuePeopleWizardJob}
                     canUsePeopleWizardGeneration={Boolean(BUILTIN_WORKFLOW_PATHS['z-image-turbo'] && BUILTIN_WORKFLOW_PATHS['multi-angles'])}
                     generationQueue={generationQueue}
@@ -15023,6 +15172,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                         styleNotes: yoloMusicBriefStyleNotes,
                                         lyrics: yoloMusicPromptLyrics,
                                         cast: yoloMusicResolvedCast,
+                                        locations: yoloMusicLocations,
                                       })
                                       void copyTextToClipboard(llmPrompt)
                                     }}

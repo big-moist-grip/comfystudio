@@ -41,9 +41,10 @@ const DRAFT_PROJECT_STORAGE_PREFIX = `${DRAFT_STORAGE_KEY}:project:`
 const STEPS = [
   { id: 'song', label: 'Song', number: '1' },
   { id: 'people', label: 'People', number: '2' },
-  { id: 'script', label: 'Director Script', number: '3' },
-  { id: 'keyframes', label: 'Keyframes', number: '4' },
-  { id: 'videos', label: 'Videos', number: '5' },
+  { id: 'locations', label: 'Locations', number: '3' },
+  { id: 'script', label: 'Director Script', number: '4' },
+  { id: 'keyframes', label: 'Keyframes', number: '5' },
+  { id: 'videos', label: 'Videos', number: '6' },
 ]
 
 const ASPECT_RATIO_OPTIONS = [
@@ -519,6 +520,8 @@ export default function MusicVideoEasyMode({
   yoloMusicCast,
   yoloMusicResolvedCast,
   setYoloMusicCast,
+  yoloMusicLocations = [],
+  setYoloMusicLocations,
   handleYoloMusicCastAdd,
   handleYoloMusicCastRemove,
   handleYoloMusicCastAssetChange,
@@ -528,6 +531,8 @@ export default function MusicVideoEasyMode({
   handleYoloMusicCastNotesChange,
   handleImportYoloMusicCastImage,
   yoloMusicCastImageImporting = false,
+  handleImportYoloMusicLocationImage,
+  yoloMusicLocationImageImporting = false,
   queuePeopleWizardJob,
   canUsePeopleWizardGeneration = false,
   yoloMusicKeyframeWorkflowId = 'nano-banana-2',
@@ -596,6 +601,7 @@ export default function MusicVideoEasyMode({
   const [advancedAudioOpen, setAdvancedAudioOpen] = useState(false)
   const [briefStatus, setBriefStatus] = useState('')
   const [peopleStatus, setPeopleStatus] = useState('')
+  const [locationsStatus, setLocationsStatus] = useState('')
   const [parseStatus, setParseStatus] = useState('')
   const [keyframeStatus, setKeyframeStatus] = useState('')
   const [videoStatus, setVideoStatus] = useState('')
@@ -1990,6 +1996,40 @@ export default function MusicVideoEasyMode({
     }
   }
 
+  const handleAddLocation = () => {
+    setYoloMusicLocations?.((prev) => {
+      const list = Array.isArray(prev) ? [...prev] : []
+      list.push({
+        id: `location-${Date.now()}-${list.length}`,
+        name: '',
+        description: '',
+        assetId: null,
+      })
+      return list
+    })
+    setLocationsStatus('Added a blank location. Add a name, description, and optional keyframe image.')
+  }
+
+  const handleImportLocationKeyframe = async () => {
+    if (!handleImportYoloMusicLocationImage || yoloMusicLocationImageImporting) return
+    setLocationsStatus('')
+    const importedAsset = await handleImportYoloMusicLocationImage()
+    if (importedAsset) {
+      setLocationsStatus(`Imported ${importedAsset.name || 'location keyframe'} and added it to Locations & Sets.`)
+    }
+  }
+
+  const handleLocationFieldChange = (locationId, field, value) => {
+    setYoloMusicLocations?.((prev) => (Array.isArray(prev) ? prev : []).map((entry) => (
+      entry?.id === locationId ? { ...entry, [field]: value } : entry
+    )))
+  }
+
+  const handleLocationRemove = (locationId) => {
+    setYoloMusicLocations?.((prev) => (Array.isArray(prev) ? prev : []).filter((entry) => entry?.id !== locationId))
+    setLocationsStatus('Location removed.')
+  }
+
   const handlePeopleWizardFieldChange = (field, value) => {
     updatePeopleWizard({ [field]: value })
   }
@@ -3037,6 +3077,121 @@ export default function MusicVideoEasyMode({
         </div>
       </div>
       {renderPeopleWizardModal()}
+    </div>
+  )
+
+  const renderLocationsStep = () => (
+    <div className="space-y-4">
+      {renderStepHeader(
+        'Define locations and sets.',
+        'Add the places the Director Script can use, with optional keyframe images so the LLM knows the visual anchors before it plots shots.'
+      )}
+
+      <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/70 p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <FieldLabel>Locations & Sets</FieldLabel>
+            <div className="mt-1 text-sm font-semibold text-sf-text-primary">
+              {plural((yoloMusicLocations || []).length, 'defined location')}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleImportLocationKeyframe}
+              disabled={!handleImportYoloMusicLocationImage || yoloMusicLocationImageImporting}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 text-xs font-semibold text-sf-text-secondary transition-colors hover:border-sf-dark-500 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              title="Import a still image that represents a location or set."
+            >
+              {yoloMusicLocationImageImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              {yoloMusicLocationImageImporting ? 'Importing' : 'Upload Keyframe'}
+            </button>
+            <button
+              type="button"
+              onClick={handleAddLocation}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-sf-accent px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-sf-accent/90"
+            >
+              <ImageIcon className="h-4 w-4" />
+              Add Location
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-3">
+          {locationsStatus && (
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+              {locationsStatus}
+            </div>
+          )}
+          {(yoloMusicLocations || []).length === 0 && (
+            <div className="rounded-lg border border-dashed border-sf-dark-600 px-3 py-6 text-center text-xs text-sf-text-muted">
+              Add locations before copying the LLM brief if you want the script to reuse named sets.
+            </div>
+          )}
+          {(yoloMusicLocations || []).map((entry, index) => {
+            const locationAsset = imageAssets.find((asset) => asset?.id === entry?.assetId) || null
+            const locationUrl = getAssetUrl(locationAsset)
+            return (
+              <div key={entry.id || index} className="grid gap-3 rounded-lg border border-sf-dark-700 bg-sf-dark-950/50 p-3 lg:grid-cols-[8rem_minmax(0,1fr)_minmax(0,1.4fr)_auto]">
+                <div>
+                  <FieldLabel>Reference</FieldLabel>
+                  <div className="mt-1 aspect-video overflow-hidden rounded-lg border border-sf-dark-600 bg-sf-dark-900">
+                    {locationUrl ? (
+                      <img src={locationUrl} alt="" className="h-full w-full object-cover" loading="lazy" decoding="async" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-[10px] text-sf-text-muted">
+                        No image
+                      </div>
+                    )}
+                  </div>
+                  <select
+                    value={entry?.assetId || ''}
+                    onChange={(event) => handleLocationFieldChange(entry.id, 'assetId', event.target.value || null)}
+                    className="mt-2 w-full rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-2 py-1.5 text-[10px] text-sf-text-primary outline-none focus:border-sf-accent"
+                  >
+                    <option value="">No image</option>
+                    {imageAssets.map((asset) => (
+                      <option key={asset.id} value={asset.id}>{asset.name || asset.id}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <FieldLabel>Location Name</FieldLabel>
+                  <input
+                    type="text"
+                    value={entry?.name || ''}
+                    onChange={(event) => handleLocationFieldChange(entry.id, 'name', event.target.value)}
+                    placeholder="Greenfield Store Interior"
+                    className="mt-1 w-full rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 text-xs text-sf-text-primary outline-none focus:border-sf-accent"
+                  />
+                  <p className="mt-1 text-[10px] leading-4 text-sf-text-muted">
+                    The LLM will use this exact name in shot Locations fields.
+                  </p>
+                </div>
+                <div>
+                  <FieldLabel>Description</FieldLabel>
+                  <textarea
+                    value={entry?.description || ''}
+                    onChange={(event) => handleLocationFieldChange(entry.id, 'description', event.target.value)}
+                    rows={4}
+                    placeholder="Bright interior with tall wooden shelves, potted plants, and warm overhead lighting."
+                    className="mt-1 w-full resize-y rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 text-xs text-sf-text-primary outline-none focus:border-sf-accent"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <button
+                    type="button"
+                    onClick={() => handleLocationRemove(entry.id)}
+                    className="rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-muted transition-colors hover:border-red-400/60 hover:text-red-200"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 
@@ -4560,6 +4715,7 @@ export default function MusicVideoEasyMode({
   const stepRenderer = {
     song: renderSongStep,
     people: renderPeopleStep,
+    locations: renderLocationsStep,
     script: renderScriptStep,
     keyframes: renderKeyframesStep,
     videos: renderVideosStep,
@@ -4569,7 +4725,7 @@ export default function MusicVideoEasyMode({
     <>
       <div className="space-y-4">
         <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/40 p-2">
-          <div className="grid gap-2 md:grid-cols-5">
+          <div className="grid gap-2 md:grid-cols-6">
             {STEPS.map((entry) => {
               const selected = step === entry.id
               const disabled = isStepDisabled(entry.id)

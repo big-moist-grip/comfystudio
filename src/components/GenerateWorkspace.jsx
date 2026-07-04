@@ -1209,6 +1209,11 @@ function normalizeShotPendingCandidates(value) {
   ))
 }
 
+function getSrtAssetText(asset) {
+  if (!asset || asset.type !== 'srt') return ''
+  return String(asset.text || asset.rawText || asset.content || '').trim()
+}
+
 function normalizeShotForScene(sceneId, shot, shotIndex, fallback = {}, options = {}) {
   const minDurationSeconds = Math.max(0.1, Number(options.minDurationSeconds) || 2)
   const maxDurationSeconds = Math.max(minDurationSeconds, Number(options.maxDurationSeconds) || 5)
@@ -3351,6 +3356,7 @@ function collectGenerateWorkspaceAssetIds(state) {
     state?.yoloAdModelAssetId,
     state?.yoloAdVoiceoverAssetId,
     state?.yoloMusicAudioAssetId,
+    state?.yoloMusicSrtAssetId,
     state?.yoloMusicArtistAssetId,
   ]
   Object.values(state?.selectedAssetFieldIds || {}).forEach((assetId) => ids.push(assetId))
@@ -3551,6 +3557,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   // Ad Creation state is completely independent (yoloAd*) — do not cross
   // the streams when editing either side.
   const [yoloMusicAudioAssetId, setYoloMusicAudioAssetId] = useState(persistedState?.yoloMusicAudioAssetId || null)
+  const [yoloMusicSrtAssetId, setYoloMusicSrtAssetId] = useState(persistedState?.yoloMusicSrtAssetId || null)
   const [yoloMusicAudioKind, setYoloMusicAudioKind] = useState(persistedState?.yoloMusicAudioKind || 'mixed_track')
   const [yoloMusicAsrLanguage, setYoloMusicAsrLanguage] = useState(persistedState?.yoloMusicAsrLanguage || 'English')
   // Lyrics field accepts plain text, SRT, or LRC — auto-detected by
@@ -3932,6 +3939,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         yoloAdVideoTier,
         yoloPlan,
         yoloMusicAudioAssetId,
+        yoloMusicSrtAssetId,
         yoloMusicAudioKind,
         yoloMusicAsrLanguage,
         yoloMusicLyrics,
@@ -4023,6 +4031,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloAdVideoTier,
     yoloPlan,
     yoloMusicAudioAssetId,
+    yoloMusicSrtAssetId,
     yoloMusicAudioKind,
     yoloMusicAsrLanguage,
     yoloMusicLyrics,
@@ -4617,10 +4626,32 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     () => assets.filter((asset) => asset?.type === 'audio'),
     [assets]
   )
+  const yoloMusicSrtAssets = useMemo(
+    () => assets.filter((asset) => asset?.type === 'srt'),
+    [assets]
+  )
   const yoloMusicAudioAsset = useMemo(
     () => yoloMusicAudioAssets.find((asset) => asset?.id === yoloMusicAudioAssetId) || null,
     [yoloMusicAudioAssets, yoloMusicAudioAssetId]
   )
+  const yoloMusicSrtAsset = useMemo(
+    () => yoloMusicSrtAssets.find((asset) => asset?.id === yoloMusicSrtAssetId) || null,
+    [yoloMusicSrtAssets, yoloMusicSrtAssetId]
+  )
+  const yoloMusicSrtAssetText = useMemo(
+    () => getSrtAssetText(yoloMusicSrtAsset),
+    [yoloMusicSrtAsset]
+  )
+  const yoloMusicPromptLyrics = useMemo(
+    () => yoloMusicSrtAssetText || String(yoloMusicLyrics || '').trim(),
+    [yoloMusicLyrics, yoloMusicSrtAssetText]
+  )
+  useEffect(() => {
+    if (!yoloMusicSrtAssetId || !yoloMusicSrtAssetText) return
+    if (String(yoloMusicLyrics || '').trim() === yoloMusicSrtAssetText) return
+    setYoloMusicLyrics(yoloMusicSrtAssetText)
+    setYoloMusicTranscriptionStatus(`Loaded SRT lyrics from ${yoloMusicSrtAsset?.name || 'selected asset'}.`)
+  }, [yoloMusicLyrics, yoloMusicSrtAsset?.name, yoloMusicSrtAssetId, yoloMusicSrtAssetText])
   const yoloMusicSongDurationSeconds = useMemo(() => {
     const d = Number(yoloMusicAudioAsset?.duration)
     if (Number.isFinite(d) && d > 0) return d
@@ -5977,7 +6008,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       }
       const { scenes, warnings } = buildMusicVideoPlanFromScript({
         script,
-        lyrics: yoloMusicLyrics,
+        lyrics: yoloMusicPromptLyrics,
         concept: yoloMusicConcept,
         styleNotes: yoloMusicStyleNotes,
         targetDuration: yoloMusicTargetDuration,
@@ -6023,7 +6054,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     return out
   }, [
     yoloMusicAltScripts,
-    yoloMusicLyrics,
+    yoloMusicPromptLyrics,
     yoloMusicConcept,
     yoloMusicStyleNotes,
     yoloMusicTargetDuration,
@@ -6167,7 +6198,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     castSignature: yoloMusicResolvedCast
       .map((c) => `${c.slug}:${c.assetId}:${c.role || ''}`)
       .join('|'),
-    lyrics: yoloMusicLyrics,
+    lyrics: yoloMusicPromptLyrics,
     script: String(script ?? yoloMusicScript),
     concept: String(concept ?? yoloMusicConcept),
     styleNotes: String(styleNotes ?? yoloMusicStyleNotes),
@@ -6178,7 +6209,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicAudioKind,
     yoloMusicArtistAssetId,
     yoloMusicConcept,
-    yoloMusicLyrics,
+    yoloMusicPromptLyrics,
     yoloMusicQualityProfile,
     yoloMusicResolvedCast,
     yoloMusicScript,
@@ -8519,7 +8550,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
     const { scenes: nextPlan, warnings: planWarnings } = buildMusicVideoPlanFromScript({
       script: scriptContent,
-      lyrics: yoloMusicLyrics,
+      lyrics: yoloMusicPromptLyrics,
       concept: effectiveConcept,
       styleNotes: effectiveStyleNotes,
       targetDuration: yoloMusicTargetDuration,
@@ -8584,7 +8615,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicAudioAssetId,
     yoloMusicResolvedCast,
     yoloMusicConcept,
-    yoloMusicLyrics,
+    yoloMusicPromptLyrics,
     yoloMusicScript,
     yoloMusicSongDurationSeconds,
     yoloMusicStyleNotes,
@@ -9120,7 +9151,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       targetDuration: yoloMusicTargetDuration,
       concept: yoloMusicConcept,
       styleNotes: yoloMusicBriefStyleNotes,
-      lyrics: yoloMusicLyrics,
+      lyrics: yoloMusicPromptLyrics,
       cast: yoloMusicResolvedCast,
       pass: passType,
       variantDescriptor,
@@ -9132,7 +9163,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicTargetDuration,
     yoloMusicConcept,
     yoloMusicBriefStyleNotes,
-    yoloMusicLyrics,
+    yoloMusicPromptLyrics,
     yoloMusicResolvedCast,
     yoloMusicScript,
   ])
@@ -9144,7 +9175,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       targetDuration: yoloMusicTargetDuration,
       concept: yoloMusicConcept,
       styleNotes: yoloMusicBriefStyleNotes,
-      lyrics: yoloMusicLyrics,
+      lyrics: yoloMusicPromptLyrics,
       cast: yoloMusicResolvedCast,
       coveragePlan: options.coveragePlan || null,
     })
@@ -9158,7 +9189,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicTargetDuration,
     yoloMusicConcept,
     yoloMusicBriefStyleNotes,
-    yoloMusicLyrics,
+    yoloMusicPromptLyrics,
     yoloMusicResolvedCast,
   ])
 
@@ -14405,6 +14436,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     yoloMusicAudioAssets={yoloMusicAudioAssets}
                     yoloMusicAudioAssetId={yoloMusicAudioAssetId}
                     setYoloMusicAudioAssetId={setYoloMusicAudioAssetId}
+                    yoloMusicSrtAssets={yoloMusicSrtAssets}
+                    yoloMusicSrtAssetId={yoloMusicSrtAssetId}
+                    setYoloMusicSrtAssetId={setYoloMusicSrtAssetId}
                     yoloMusicAudioKind={yoloMusicAudioKind}
                     setYoloMusicAudioKind={setYoloMusicAudioKind}
                     yoloMusicAsrLanguage={yoloMusicAsrLanguage}
@@ -14946,7 +14980,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                         targetDuration: yoloMusicTargetDuration,
                                         concept: yoloMusicConcept,
                                         styleNotes: yoloMusicBriefStyleNotes,
-                                        lyrics: yoloMusicLyrics,
+                                        lyrics: yoloMusicPromptLyrics,
                                         cast: yoloMusicResolvedCast,
                                       })
                                       void copyTextToClipboard(llmPrompt)

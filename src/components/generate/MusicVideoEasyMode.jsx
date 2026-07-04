@@ -197,6 +197,11 @@ function getDraftStorageKey(projectScope = '') {
   return projectScope ? `${DRAFT_PROJECT_STORAGE_PREFIX}${projectScope}` : ''
 }
 
+function getSrtAssetText(asset) {
+  if (!asset || asset.type !== 'srt') return ''
+  return String(asset.text || asset.rawText || asset.content || '').trim()
+}
+
 function loadDraft(storageKey = '') {
   if (!storageKey || typeof localStorage === 'undefined') return DEFAULT_DRAFT
   try {
@@ -489,6 +494,9 @@ export default function MusicVideoEasyMode({
   yoloMusicAudioAssets,
   yoloMusicAudioAssetId,
   setYoloMusicAudioAssetId,
+  yoloMusicSrtAssets = [],
+  yoloMusicSrtAssetId,
+  setYoloMusicSrtAssetId,
   yoloMusicAudioKind,
   setYoloMusicAudioKind,
   yoloMusicAsrLanguage = 'English',
@@ -908,6 +916,14 @@ export default function MusicVideoEasyMode({
     }).length,
     [defaultVideoWorkflowId, selectedVideoWorkflowId, videoAssetMap, yoloQueueVariants]
   )
+  const selectedSrtAsset = useMemo(
+    () => (yoloMusicSrtAssets || []).find((asset) => asset?.id === yoloMusicSrtAssetId) || null,
+    [yoloMusicSrtAssetId, yoloMusicSrtAssets]
+  )
+  const selectedSrtText = useMemo(
+    () => getSrtAssetText(selectedSrtAsset),
+    [selectedSrtAsset]
+  )
   const timedLineCount = Array.isArray(yoloMusicParsedLyrics?.lines) ? yoloMusicParsedLyrics.lines.length : 0
   const providedLyricsLineCount = useMemo(
     () => String(yoloMusicProvidedLyrics || '')
@@ -1111,6 +1127,22 @@ export default function MusicVideoEasyMode({
     setResolutionPreset(getResolutionFallbackForWorkflow(workflowId, resolutionPreset))
     setYoloMusicVideoWorkflowId?.(workflowId)
     setVideoStatus('')
+  }
+
+  const handleSrtAssetChange = (assetId) => {
+    const nextAssetId = assetId || null
+    setYoloMusicSrtAssetId?.(nextAssetId)
+    if (!nextAssetId) return
+    const asset = (yoloMusicSrtAssets || []).find((entry) => entry?.id === nextAssetId) || null
+    const srtText = getSrtAssetText(asset)
+    if (srtText) {
+      setYoloMusicLyrics?.(srtText)
+      setYoloMusicAlignProvidedLyrics?.(false)
+      setParseStatus('')
+      setVideoStatus('')
+    } else {
+      setParseStatus(`Selected SRT asset "${asset?.name || nextAssetId}" does not include readable text.`)
+    }
   }
 
   const handleKeyframeWorkflowChange = (workflowId) => {
@@ -2322,6 +2354,33 @@ export default function MusicVideoEasyMode({
                   Align My Lyrics
                 </button>
               </div>
+            </div>
+            <div className="mt-3">
+              <label className="block">
+                <span className="text-[10px] uppercase text-sf-text-muted">Use SRT Asset</span>
+                <select
+                  value={yoloMusicSrtAssetId || ''}
+                  onChange={(event) => handleSrtAssetChange(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 text-xs text-sf-text-primary outline-none focus:border-sf-accent"
+                >
+                  <option value="">No SRT asset selected</option>
+                  {(yoloMusicSrtAssets || []).map((asset) => (
+                    <option key={asset.id} value={asset.id}>{asset.name || asset.id}</option>
+                  ))}
+                </select>
+              </label>
+              {selectedSrtAsset && (
+                <p className="mt-1 text-[10px] leading-4 text-sf-text-muted">
+                  {selectedSrtText
+                    ? `Loaded ${selectedSrtText.split(/\r?\n/).filter(Boolean).length} SRT text line${selectedSrtText.split(/\r?\n/).filter(Boolean).length === 1 ? '' : 's'} from ${selectedSrtAsset.name || 'selected asset'}.`
+                    : 'Selected SRT asset has no readable text stored yet.'}
+                </p>
+              )}
+              {(yoloMusicSrtAssets || []).length === 0 && (
+                <p className="mt-1 text-[10px] leading-4 text-sf-text-muted">
+                  Import an .srt file in Assets to use timed lyrics directly in the LLM brief.
+                </p>
+              )}
             </div>
           </div>
           {yoloMusicAlignProvidedLyrics && (
